@@ -76,7 +76,9 @@ export default async function handler(request) {
       });
     }
 
-    const apiKey = process.env.CLAUDE_API_KEY;
+    // .trim() để tự động loại bỏ khoảng trắng/dòng trống thừa nếu key bị dính khi copy-paste
+    // vào Vercel Environment Variables — nguyên nhân phổ biến gây lỗi "Invalid header value".
+    const apiKey = (process.env.CLAUDE_API_KEY || '').trim();
     if (!apiKey) {
       return new Response(JSON.stringify({ error: 'Chưa cấu hình CLAUDE_API_KEY trong Vercel Environment Variables (xem Bước 3 hướng dẫn ở đầu file)' }), {
         status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
