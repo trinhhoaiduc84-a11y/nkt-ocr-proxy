@@ -76,11 +76,27 @@ export default async function handler(request) {
       });
     }
 
-    // .trim() để tự động loại bỏ khoảng trắng/dòng trống thừa nếu key bị dính khi copy-paste
-    // vào Vercel Environment Variables — nguyên nhân phổ biến gây lỗi "Invalid header value".
-    const apiKey = (process.env.CLAUDE_API_KEY || '').trim();
+    // Loại bỏ MỌI khoảng trắng/tab/xuống dòng ở bất kỳ vị trí nào trong key (không chỉ đầu/cuối)
+    // — key API không bao giờ chứa khoảng trắng, nên xoá hết là an toàn. .trim() ở bản trước
+    // chỉ xoá đầu/cuối nên không đủ nếu ký tự lạ nằm ở giữa (VD: dán từ nguồn bị ngắt dòng).
+    const apiKey = (process.env.CLAUDE_API_KEY || '').replace(/\s+/g, '');
     if (!apiKey) {
       return new Response(JSON.stringify({ error: 'Chưa cấu hình CLAUDE_API_KEY trong Vercel Environment Variables (xem Bước 3 hướng dẫn ở đầu file)' }), {
+        status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Kiểm tra ký tự hợp lệ cho header HTTP (chỉ ký tự ASCII hiển thị được, không dấu, không
+    // ký tự ẩn). Nếu key vẫn còn ký tự lạ sau khi đã xoá khoảng trắng, báo rõ vị trí/độ dài để
+    // biết chính xác chỗ sai thay vì đoán mò lần nữa.
+    const badCharMatch = apiKey.match(/[^\x21-\x7E]/);
+    if (badCharMatch) {
+      const pos = apiKey.search(/[^\x21-\x7E]/);
+      const code = badCharMatch[0].charCodeAt(0);
+      return new Response(JSON.stringify({
+        error: 'CLAUDE_API_KEY chứa ký tự không hợp lệ',
+        detail: 'Độ dài key hiện tại: ' + apiKey.length + ' ký tự. Ký tự lạ ở vị trí ' + pos + ' (mã Unicode: ' + code + '). Hãy xoá biến CLAUDE_API_KEY trong Vercel, tạo lại và dán key mới trực tiếp từ trang console.anthropic.com (tránh gõ tay hoặc dán qua ứng dụng chat/ghi chú).',
+      }), {
         status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
