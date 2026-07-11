@@ -135,7 +135,11 @@ export default async function handler(request) {
 
     if (!claudeRes.ok) {
       const errText = await claudeRes.text();
-      return new Response(JSON.stringify({ error: 'Lỗi gọi Claude: ' + claudeRes.status, detail: errText }), {
+      // Kèm thông tin độ dài + vài ký tự đầu của key (KHÔNG lộ toàn bộ key) để biết ngay key
+      // đang dùng có đúng dạng "sk-ant-api03-..." và độ dài hợp lý (~100+ ký tự) hay không,
+      // phòng trường hợp key bị cắt/thiếu ký tự khi copy-paste vào Vercel.
+      const keyInfo = 'Key hiện dùng: ' + apiKey.length + ' ký tự, bắt đầu bằng "' + apiKey.slice(0, 12) + '..."';
+      return new Response(JSON.stringify({ error: 'Lỗi gọi Claude: ' + claudeRes.status, detail: errText + ' | ' + keyInfo }), {
         status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
