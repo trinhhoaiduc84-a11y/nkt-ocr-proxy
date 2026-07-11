@@ -48,6 +48,12 @@
 //
 // AN TOÀN: File này KHÔNG đụng gì đến Google Sheets hay dữ liệu phiếu kiểm tra — chỉ
 // nhận 1 ảnh, trả về 1 danh sách số. Không lưu trữ ảnh ở đâu cả (xử lý xong là bỏ).
+//
+// SO SÁNH ĐỘ CHÍNH XÁC: file này dùng model Haiku (rẻ nhất). Có 2 file song song để so sánh
+// độ chính xác đọc số — ocr-sonnet.js (model Sonnet 5, endpoint /api/ocr-sonnet) và
+// ocr-opus.js (model Opus 4.8, endpoint /api/ocr-opus). Cả 3 dùng chung CLAUDE_API_KEY đã
+// cấu hình, không cần tạo thêm key hay project Vercel mới — chỉ cần thêm 2 file đó vào cùng
+// thư mục api/ trong repo GitHub hiện có.
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const config = { runtime: 'edge' };
@@ -101,14 +107,23 @@ export default async function handler(request) {
       });
     }
 
+    // v58fix: cải tiến prompt — yêu cầu đọc từng chữ số một cách cẩn thận, chủ động lưu ý các
+    // cặp chữ số dễ nhầm khi viết tay, và tự đếm lại trước khi trả lời — nhằm giảm đọc sai mà
+    // KHÔNG đổi định dạng JSON trả về (an toàn cho phần app đang ăn theo định dạng cũ).
     const prompt =
-      'Đây là ảnh chụp/viết tay danh sách số hiệu ống (pipe serial number) của một xưởng kiểm tra ống thép.\n' +
-      'Hãy đọc CHÍNH XÁC từng số hiệu ống xuất hiện trong ảnh, theo đúng thứ tự xuất hiện (trái sang phải, trên xuống dưới).\n' +
+      'Đây là ảnh chụp danh sách số hiệu ống (pipe serial number), viết tay hoặc in, của một xưởng kiểm tra ống thép.\n\n' +
+      'Hãy đọc theo các bước sau:\n' +
+      '1. Xác định từng số hiệu ống xuất hiện trong ảnh, theo đúng thứ tự (trái sang phải, trên xuống dưới).\n' +
+      '2. Với mỗi số, đọc CẨN THẬN từng chữ số một — đặc biệt chú ý các cặp chữ số dễ nhầm khi viết tay: ' +
+      '1 và 7, 0 và 6, 3 và 8, 2 và 7, 5 và 6, 4 và 9. Nếu nét chữ không rõ, hãy dựa vào các số liền kề ' +
+      'trong danh sách (thường có quy luật tăng/giảm dần hoặc gần nhau) để suy luận số hợp lý nhất.\n' +
+      '3. Sau khi đọc xong, đếm lại xem đã đọc đủ số lượng số hiệu nhìn thấy trong ảnh chưa — không bỏ sót, ' +
+      'không thêm số không có thật.\n\n' +
       'CHỈ trả lời bằng một mảng JSON thuần các chuỗi số, không kèm bất kỳ chữ giải thích, markdown, hay ký tự nào khác.\n' +
       'Ví dụ đúng định dạng: ["7115","7136","7113"]\n' +
       'Nếu không đọc được số nào, trả lời: []';
 
-    const model = 'claude-haiku-4-5-20251001'; // rẻ + nhanh, đủ dùng cho việc đọc số này
+    const model = 'claude-haiku-4-5-20251001'; // rẻ + nhanh — bản so sánh: ocr-sonnet.js / ocr-opus.js
 
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
