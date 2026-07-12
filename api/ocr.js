@@ -94,8 +94,10 @@ const SUAREN_REPAIR = {
   'da-sua-ca-hai': 'Đã sửa ren VÀ thay Coupling (cả hai)',
 };
 
-// Đoạn hướng dẫn đọc số hiệu ống — giữ NGUYÊN VĂN so với bản trước (v59fix), đã kiểm
-// chứng độ chính xác tốt, không đổi để không ảnh hưởng khả năng đọc số hiện có.
+// Đoạn hướng dẫn đọc số hiệu ống — giữ NGUYÊN VĂN phần lõi so với bản trước (v59fix), đã kiểm
+// chứng độ chính xác tốt. v63fix2: bổ sung mục 3c xử lý khoảng số VIẾT NGƯỢC (số đầu > số cuối)
+// — thực tế sổ tay có kiểu ghi "7031 → 7026" (đếm lùi), bản trước chưa nói rõ nên model có thể
+// bỏ sót/không mở rộng được, dẫn tới đọc thiếu hoặc trả lời rỗng.
 const SERIAL_READING_STEPS =
   '1. Xác định từng số hiệu ống hoặc từng ký hiệu khoảng số xuất hiện trong ảnh, theo đúng thứ tự (trái sang phải, trên xuống dưới).\n' +
   '2. Với mỗi số, đọc CẨN THẬN từng chữ số một — đặc biệt chú ý các cặp chữ số dễ nhầm khi viết tay: ' +
@@ -111,8 +113,20 @@ const SERIAL_READING_STEPS =
   'Ví dụ: "7276-7280,7291,7295,7298-7305" nghĩa là: khoảng 7276-7280 (5 số: 7276,7277,7278,7279,7280), ' +
   'số đơn 7291, số đơn 7295, khoảng 7298-7305 (8 số: 7298,7299,7300,7301,7302,7303,7304,7305) — ' +
   'tổng cộng 15 số riêng lẻ.\n' +
+  '   c. Nếu số ĐẦU LỚN HƠN số CUỐI (khoảng viết ngược/đếm lùi, VD "7031 → 7026"), vẫn PHẢI mở ' +
+  'rộng đủ theo chiều giảm dần: "7031 → 7026" nghĩa là 6 số: 7031,7030,7029,7028,7027,7026. ' +
+  'KHÔNG được bỏ qua hay để trống chỉ vì khoảng viết theo chiều giảm.\n' +
   '4. Sau khi đọc và mở rộng hết các khoảng, đếm lại xem đã liệt kê đủ chưa — không bỏ sót, ' +
   'không thêm số không có thật, không để sót ký hiệu mũi tên/gạch ngang nào chưa mở rộng trong kết quả.';
+
+// v63fix2: NDT hay dùng thuật ngữ tiếng Anh viết tắt "Cross"/"Line" (hướng vết nứt: ngang/dọc)
+// — app hiện KHÔNG phân biệt 2 hướng này, cả 2 đều gộp vào "Nứt thân". Model không tự biết quy
+// ước riêng của xưởng này nếu không được nói rõ — KTV đã nhắc lại yêu cầu này 2 lần nên hardcode
+// thẳng vào prompt của khâu NDT, không phụ thuộc suy luận chung chung nữa.
+const NDT_CROSS_LINE_NOTE =
+  '\n\nLƯU Ý RIÊNG CHO KHÂU NDT: nếu ảnh ghi bằng thuật ngữ tiếng Anh viết tắt "Cross"/"Cross def." ' +
+  '(vết nứt ngang) hoặc "Line"/"Line def." (vết nứt dọc) — CẢ HAI đều là vết nứt, LUÔN ánh xạ về mã ' +
+  '"nut-than" (Nứt thân), không phân biệt ngang/dọc (app không có mã riêng cho từng hướng).';
 
 function buildPrompt(stageNum, withDefects) {
   if (!withDefects) {
@@ -135,15 +149,23 @@ function buildPrompt(stageNum, withDefects) {
        '(hoặc để null nếu ảnh không ghi rõ trạng thái xử lý cho ống đó):\n' +
        Object.entries(SUAREN_REPAIR).map(([k, v]) => `  - "${k}": ${v}`).join('\n'))
     : '';
+  const ndtNote = (stageNum === 3) ? NDT_CROSS_LINE_NOTE : '';
+  // v63fix2: TÁCH "numbers" (đầy đủ, mọi ống đọc được) ra khỏi "pipes" (CHỈ ống có lỗi/đã xử lý)
+  // — 2 lý do: (1) an toàn — nếu phần "pipes" bị lỗi định dạng/bị cắt giữa chừng (ảnh nhiều ống,
+  // model sinh chữ dài dễ vượt giới hạn thời gian 25s của Vercel Edge Function), "numbers" vẫn
+  // đứng riêng nên KHÔNG bị mất theo, ít nhất vẫn đọc được số ống như tính năng gốc; (2) nhanh
+  // hơn — đa số ống trong 1 ảnh thường "Đạt", liệt kê cả những ống đó vào "pipes" là dư thừa,
+  // chỉ cần liệt kê ống có vấn đề giúp model trả lời ngắn hơn nhiều → ít khả năng bị cắt/timeout.
   return (
     `Đây là ảnh chụp SỔ/BẢNG GHI CHÉP kiểm tra ống thép tại khâu "${stageName}" của một xưởng kiểm tra ống. ` +
     'Sổ có thể ở BẤT KỲ định dạng nào — bảng kẻ ô in sẵn, sổ tay viết tay tự do, danh sách đơn giản, ảnh chụp ' +
     'Excel, v.v. Hãy TỰ THÍCH ỨNG với định dạng thực tế trong ảnh, KHÔNG giả định trước cấu trúc cột.\n\n' +
     'Thực hiện theo đúng các bước sau:\n\n' +
-    'BƯỚC 1 — ĐỌC SỐ HIỆU ỐNG:\n' + SERIAL_READING_STEPS + '\n\n' +
-    'BƯỚC 2 — VỚI MỖI ỐNG đã đọc được số ở Bước 1, xác định ghi chú/lỗi (nếu có) mà ảnh THỰC SỰ ghi cho ' +
-    'đúng ống đó, rồi ánh xạ sang mã lỗi trong danh sách sau (CHỈ được dùng đúng mã trong danh sách, ' +
-    'KHÔNG tự bịa mã khác, một ống có thể có NHIỀU mã cùng lúc nếu ảnh ghi rõ nhiều vấn đề):\n' +
+    'BƯỚC 1 — ĐỌC SỐ HIỆU ỐNG (TOÀN BỘ, kể cả ống không có lỗi gì):\n' + SERIAL_READING_STEPS + '\n\n' +
+    'BƯỚC 2 — CHỈ với những ống THỰC SỰ có ghi chú/lỗi (bỏ qua hoàn toàn ống bình thường/"Đạt"/không ' +
+    'có ghi chú gì), xác định ghi chú đó là gì rồi ánh xạ sang mã lỗi trong danh sách sau (CHỈ được dùng ' +
+    'đúng mã trong danh sách, KHÔNG tự bịa mã khác, một ống có thể có NHIỀU mã cùng lúc nếu ảnh ghi rõ ' +
+    'nhiều vấn đề):\n' +
     defectListTxt + '\n\n' +
     'Quy tắc ánh xạ lỗi (RẤT QUAN TRỌNG):\n' +
     '  - Chỉ gán lỗi cho ống nếu ảnh THỰC SỰ có ghi chú/ký hiệu/dấu tick/khoanh tròn/gạch chéo/chữ viết tay ' +
@@ -151,14 +173,69 @@ function buildPrompt(stageNum, withDefects) {
     '  - Nếu ghi chú rõ ràng có ý nghĩa "có vấn đề/lỗi/loại/reject" (VD dấu X, gạch chéo, khoanh đỏ, chữ ' +
     '"hỏng"/"loại"/"reject"...) nhưng KHÔNG xác định được đúng loại lỗi cụ thể trong danh sách, dùng mã ' +
     '"khac" NẾU danh sách trên có mã đó; nếu danh sách không có "khac" thì bỏ qua, không gán mã nào.\n' +
-    '  - Ống không có ghi chú đặc biệt gì → mảng "defects" để rỗng [].' +
-    repairSection + '\n\n' +
-    'CHỈ trả lời bằng một object JSON DUY NHẤT theo đúng định dạng sau, không kèm chữ giải thích, không markdown:\n' +
-    '{"pipes":[{"serial":"7115","defects":["' + (allowedDefects[0] || 'khac') + '"]' +
+    '  - Ống KHÔNG có ghi chú đặc biệt gì → BỎ QUA HẲN, không thêm vào "pipes" (xem định dạng JSON bên dưới).' +
+    repairSection + ndtNote + '\n\n' +
+    'CHỈ trả lời bằng một object JSON DUY NHẤT theo đúng định dạng sau, không kèm chữ giải thích, không ' +
+    'markdown. Trả "numbers" TRƯỚC (đầy đủ mọi ống đọc được ở Bước 1), rồi mới tới "pipes" (CHỈ ống có ' +
+    'lỗi/đã xử lý xác định được ở Bước 2' + (stageNum === 4 ? '/Bước 3' : '') + ' — ống bình thường KHÔNG liệt kê vào đây):\n' +
+    '{"numbers":["7113","7114","7115"],"pipes":[{"serial":"7115","defects":["' + (allowedDefects[0] || 'khac') + '"]' +
     (stageNum === 4 ? ',"repair":"da-sua-ren"' : '') + '}]}\n' +
-    'Ống không có lỗi: "defects":[]' + (stageNum === 4 ? ', "repair":null' : '') + '.\n' +
-    'Nếu không đọc được số ống nào: {"pipes":[]}'
+    '("numbers" ở ví dụ trên có 3 ống nhưng "pipes" chỉ có 1 — vì chỉ ống 7115 có lỗi, 7113/7114 bình thường nên không liệt kê.)\n' +
+    'Nếu không đọc được số ống nào: {"numbers":[],"pipes":[]}'
   );
+}
+
+// v63fix2: trích riêng 1 trường mảng (VD "numbers" hoặc "pipes") từ text trả về, có khả năng
+// "cứu" dữ liệu khi JSON bị CẮT GIỮA CHỪNG (model bị dừng khi chạm max_tokens hoặc kết nối bị
+// ngắt giữa chừng vì gần chạm giới hạn 25s của Vercel Edge Function) — thay vì phải JSON.parse
+// nguyên khối rồi mất trắng cả object nếu chỉ 1 ký tự cuối bị thiếu. Theo dõi độ sâu ngoặc
+// []/{} và trạng thái trong-chuỗi để tìm đúng dấu ']' khớp; nếu không tìm thấy (bị cắt), cắt bớt
+// về phần tử hoàn chỉnh gần cuối cùng rồi tự đóng ']' lại để JSON.parse phần còn cứu được.
+function extractArrayField(rawText, key) {
+  const keyIdx = rawText.indexOf('"' + key + '"');
+  if (keyIdx === -1) return null;
+  const bracketIdx = rawText.indexOf('[', keyIdx);
+  if (bracketIdx === -1) return null;
+  let depth = 0, inStr = false, esc = false, endIdx = -1;
+  for (let i = bracketIdx; i < rawText.length; i++) {
+    const ch = rawText[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '[' || ch === '{') depth++;
+    else if (ch === ']' || ch === '}') {
+      depth--;
+      if (depth === 0 && ch === ']') { endIdx = i; break; }
+    }
+  }
+  let slice;
+  if (endIdx !== -1) {
+    slice = rawText.slice(bracketIdx, endIdx + 1);
+  } else {
+    // Bị cắt giữa chừng — tìm điểm cắt AN TOÀN gần cuối nhất ở độ sâu 1 (ngay trong mảng ngoài
+    // cùng, không nằm giữa 1 object/chuỗi con dở dang) rồi tự đóng ']'.
+    slice = rawText.slice(bracketIdx);
+    let d = 0, si = false, es = false, cut = -1;
+    for (let i = 0; i < slice.length; i++) {
+      const ch = slice[i];
+      if (si) {
+        if (es) es = false;
+        else if (ch === '\\') es = true;
+        else if (ch === '"') si = false;
+        continue;
+      }
+      if (ch === '"') { si = true; continue; }
+      if (ch === '[' || ch === '{') d++;
+      else if (ch === ']' || ch === '}') { d--; if (d === 1 && ch === '}') cut = i; }
+      else if (ch === ',' && d === 1) cut = i - 1;
+    }
+    slice = (cut !== -1) ? (slice.slice(0, cut + 1) + ']') : '[]';
+  }
+  try { return JSON.parse(slice); } catch (e) { return null; }
 }
 
 export default async function handler(request) {
@@ -227,7 +304,10 @@ export default async function handler(request) {
       },
       body: JSON.stringify({
         model: model,
-        max_tokens: withDefects ? 4096 : 2048, // v63: object lỗi/ống dài hơn mảng số thuần — tăng giới hạn khi có nhận diện lỗi
+        // v63fix2: hạ từ 4096 xuống 3072 — từ khi "pipes" chỉ liệt kê ống có lỗi (không liệt kê
+        // hết mọi ống nữa), nhu cầu thực tế thấp hơn nhiều; hạ giới hạn giúp giảm rủi ro chạm mốc
+        // 25s timeout cứng của Vercel Edge Function (xem ghi chú ở buildPrompt).
+        max_tokens: withDefects ? 3072 : 2048,
         messages: [{
           role: 'user',
           content: [
@@ -258,47 +338,56 @@ export default async function handler(request) {
       .map(b => b.text)
       .join('\n');
 
-    // v63: 2 đường trích JSON tuỳ withDefects — object {"pipes":[...]} khi có nhận diện lỗi,
-    // mảng thuần [...] khi chỉ đọc số (y hệt hành vi cũ, không đổi để không phá tương thích).
-    let numbers = [];
-    let pipesOut = [];
+    // v63fix2: "numbers" và "pipes" giờ ĐỘC LẬP với nhau — trích riêng từng trường thay vì phải
+    // JSON.parse trọn 1 object rồi mất trắng cả hai nếu chỉ 1 phần bị lỗi/bị cắt. Thử JSON.parse
+    // nguyên khối trước (đường nhanh, đa số trường hợp); nếu hỏng mới rơi xuống trích riêng từng
+    // trường bằng extractArrayField() (có khả năng cứu dữ liệu khi bị cắt giữa chừng).
+    let numbersRaw = null, pipesRaw = null;
     if (withDefects) {
       const objMatch = rawText.match(/\{[\s\S]*\}/);
+      let wholeOk = false;
       if (objMatch) {
         try {
           const parsed = JSON.parse(objMatch[0]);
-          const arr = Array.isArray(parsed.pipes) ? parsed.pipes : [];
-          const allowedDefects = stageDefectKeys(stageNum);
-          arr.forEach(p => {
-            if (!p || !p.serial) return;
-            const serial = String(p.serial).trim();
-            if (!serial) return;
-            let defects = Array.isArray(p.defects)
-              ? [...new Set(p.defects.map(String).filter(k => allowedDefects.includes(k)))]
-              : [];
-            let repair = null;
-            if (stageNum === 4 && p.repair && Object.prototype.hasOwnProperty.call(SUAREN_REPAIR, String(p.repair))) {
-              repair = String(p.repair);
-            }
-            pipesOut.push({ serial, defects, repair });
-            numbers.push(serial);
-          });
-        } catch (e) {
-          // để rỗng nếu model trả về sai định dạng — app sẽ báo "không đọc được"
-        }
+          numbersRaw = Array.isArray(parsed.numbers) ? parsed.numbers : null;
+          pipesRaw = Array.isArray(parsed.pipes) ? parsed.pipes : null;
+          wholeOk = true;
+        } catch (e) { /* rơi xuống trích riêng từng trường bên dưới */ }
       }
+      if (!wholeOk || numbersRaw === null) numbersRaw = extractArrayField(rawText, 'numbers');
+      if (!wholeOk || pipesRaw === null) pipesRaw = extractArrayField(rawText, 'pipes');
     } else {
+      // Hành vi CŨ y nguyên: model trả về 1 mảng JSON thuần các số (không có "pipes").
       const arrMatch = rawText.match(/\[[\s\S]*\]/);
       if (arrMatch) {
         try {
           const parsed = JSON.parse(arrMatch[0]);
-          if (Array.isArray(parsed)) {
-            numbers = parsed.map(String).map(s => s.trim()).filter(Boolean);
-          }
-        } catch (e) {
-          // để numbers rỗng nếu model trả về sai định dạng — app sẽ báo "không đọc được"
-        }
+          if (Array.isArray(parsed)) numbersRaw = parsed;
+        } catch (e) { /* để null — numbers rỗng, app báo "không đọc được" */ }
       }
+    }
+
+    const numbers = Array.isArray(numbersRaw)
+      ? [...new Set(numbersRaw.map(String).map(s => s.trim()).filter(Boolean))]
+      : [];
+
+    let pipesOut = [];
+    if (withDefects && Array.isArray(pipesRaw)) {
+      const allowedDefects = stageDefectKeys(stageNum);
+      pipesRaw.forEach(p => {
+        if (!p || !p.serial) return;
+        const serial = String(p.serial).trim();
+        if (!serial) return;
+        const defects = Array.isArray(p.defects)
+          ? [...new Set(p.defects.map(String).filter(k => allowedDefects.includes(k)))]
+          : [];
+        let repair = null;
+        if (stageNum === 4 && p.repair && Object.prototype.hasOwnProperty.call(SUAREN_REPAIR, String(p.repair))) {
+          repair = String(p.repair);
+        }
+        if (!defects.length && !repair) return; // phòng khi model lỡ liệt kê cả ống bình thường — vẫn lọc bỏ ở tầng proxy
+        pipesOut.push({ serial, defects, repair });
+      });
     }
 
     return new Response(JSON.stringify({ numbers, pipes: pipesOut }), {
