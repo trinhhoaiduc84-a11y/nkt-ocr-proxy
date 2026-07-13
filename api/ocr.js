@@ -105,6 +105,36 @@ const SUAREN_REPAIR = {
   'da-sua-ca-hai': 'Đã sửa ren VÀ thay Coupling (cả hai)',
 };
 
+// v64rev1: KTV dò tay 1 lượt kết quả thật, phát hiện thêm 3 cặp chữ số hay bị đọc nhầm mà bản v64
+// CHƯA liệt kê: "1 và 4", "5 và 8", "2 và 3" (trước đó chỉ có 1&7, 0&6, 3&8, 2&7, 5&6, 4&9). Gộp
+// chung thành 1 danh sách đầy đủ DÙNG CHUNG cho cả SERIAL_READING_STEPS (đọc số) và
+// buildDefectsOnlyPrompt (đọc số của ống lỗi) để không bị lệch nhau giữa 2 nơi.
+// v64rev1: NGOÀI liệt kê cặp dễ nhầm, còn thêm HÌNH DẠNG NÉT CHỮ đặc trưng để phân biệt từng cặp —
+// model nhỏ/nhanh như Haiku ít khả năng tự suy luận "vì sao dễ nhầm" nếu chỉ nêu tên số, nhưng nếu
+// được cho ĐẶC ĐIỂM HÌNH DẠNG cụ thể để so khớp trực tiếp với nét chữ trong ảnh thì dễ áp dụng hơn
+// nhiều so với chỉ dựa vào ngữ cảnh số liền kề (vốn chỉ có tác dụng khi danh sách có quy luật rõ).
+const DIGIT_CONFUSION_PAIRS = '1 và 7, 1 và 4, 0 và 6, 3 và 8, 2 và 7, 2 và 3, 5 và 6, 5 và 8, 4 và 9';
+const DIGIT_SHAPE_HINTS =
+  'Đặc điểm hình dạng để phân biệt từng cặp (dùng để soi trực tiếp vào nét chữ trong ảnh, không chỉ ' +
+  'đoán theo ngữ cảnh):\n' +
+  '   - "1" và "7": số 1 thường là 1 nét thẳng đơn giản (có thể có gạch chân nhỏ dưới đáy); số 7 có ' +
+  'nét ngang ở đỉnh rồi chéo xuống, KHÔNG có gạch chân.\n' +
+  '   - "1" và "4": số 1 vẫn là nét thẳng đơn; số 4 có 1 góc nhọn hoặc 2 nét giao nhau tạo hình tam ' +
+  'giác hở/chữ V ngược ở phần trên, không phải 1 nét thẳng đơn thuần.\n' +
+  '   - "0" và "6": số 0 là vòng tròn/oval khép kín đều 2 bên; số 6 có móc cong ở phía trên nối ' +
+  'xuống 1 vòng tròn nhỏ ở đáy — hình dạng KHÔNG đối xứng, phần trên gầy hơn phần dưới.\n' +
+  '   - "3" và "8": số 3 gồm 2 nét cong hở về bên phải (không khép kín); số 8 gồm 2 vòng tròn khép ' +
+  'kín nối chồng lên nhau.\n' +
+  '   - "2" và "7": số 2 có nét cong ở trên và 1 đáy NGANG PHẲNG rõ ràng; số 7 có nét ngang ở ĐỈNH ' +
+  'rồi 1 nét chéo xuống, KHÔNG có đáy ngang phẳng.\n' +
+  '   - "2" và "3": số 2 có đáy ngang phẳng rõ (như nêu trên); số 3 gồm 2 nét cong liên tiếp, hoàn ' +
+  'toàn KHÔNG có đáy ngang phẳng nào.\n' +
+  '   - "5" và "6": số 5 có nét ngang ở đỉnh và móc cong HỞ ở phía dưới; số 6 có móc cong ở trên nối ' +
+  'xuống vòng tròn KHÉP KÍN ở đáy.\n' +
+  '   - "5" và "8": số 5 hở (không khép vòng kín nào); số 8 khép kín 2 vòng tròn chồng lên nhau.\n' +
+  '   - "4" và "9": số 4 có góc nhọn/nét giao nhau như mô tả trên; số 9 có 1 vòng tròn khép kín ở ' +
+  'phía trên và 1 đuôi thẳng/hơi cong kéo xuống phía dưới.';
+
 // Đoạn hướng dẫn đọc số hiệu ống — lõi giữ từ v59fix/v63fix2 (đã kiểm chứng tốt), v64 ĐI SÂU
 // THÊM theo yêu cầu KTV ("đi sâu vào phân tích, nhận diện, đọc số chính xác, đọc được các dãy số
 // dài"): thêm bước QUÉT TOÀN ẢNH trước khi đọc (không bỏ sót góc/mép/dòng chen), thêm ĐỌC 2 LƯỢT
@@ -120,10 +150,12 @@ const SERIAL_READING_STEPS =
   'phải, trên xuống dưới, hết cột này sang cột khác nếu ảnh có nhiều cột).\n' +
   '3. ĐỌC 2 LƯỢT cho MỖI số: lượt 1 đọc thô toàn bộ chữ số; lượt 2 rà lại từng chữ số một lần nữa, ' +
   'đối chiếu với các số liền kề trong danh sách (thường tăng/giảm dần hoặc gần nhau) để phát hiện chỗ ' +
-  'khả năng đọc nhầm — đặc biệt chú ý các cặp chữ số dễ nhầm khi viết tay: 1 và 7, 0 và 6, 3 và 8, ' +
-  '2 và 7, 5 và 6, 4 và 9. Nếu nét chữ không rõ, dùng quy luật của các số liền kề để chọn chữ số hợp ' +
-  'lý nhất — LUÔN đưa ra số cụ thể (không được bỏ trống một số chỉ vì không chắc 100%, đây là việc ' +
-  'khác với việc nhận diện lỗi — số ống thì luôn phải có kết quả, dù là suy luận tốt nhất).\n' +
+  'khả năng đọc nhầm — đặc biệt chú ý các cặp chữ số dễ nhầm khi viết tay: ' + DIGIT_CONFUSION_PAIRS + '.\n' +
+  DIGIT_SHAPE_HINTS + '\n' +
+  'Nếu nét chữ không rõ, ƯU TIÊN so khớp hình dạng nét chữ thực tế trong ảnh với đặc điểm ở trên ' +
+  'TRƯỚC, sau đó mới dùng thêm quy luật của các số liền kề (nếu có) để chọn chữ số hợp lý nhất — ' +
+  'LUÔN đưa ra số cụ thể (không được bỏ trống một số chỉ vì không chắc 100%, đây là việc khác với ' +
+  'việc nhận diện lỗi — số ống thì luôn phải có kết quả, dù là suy luận tốt nhất).\n' +
   '4. LƯU Ý CÁC KÝ HIỆU RÚT GỌN sau — PHẢI MỞ RỘNG thành đầy đủ từng số riêng lẻ trong kết quả, ' +
   'không được giữ nguyên dạng rút gọn:\n' +
   '   a. Hai số nối bằng MŨI TÊN (→, ->) hoặc DẤU GẠCH NGANG (-) nghĩa là một KHOẢNG liên tục — ' +
@@ -215,7 +247,7 @@ function buildDefectsOnlyPrompt(stageNum) {
     'ống có vấn đề).\n\n' +
     'Với MỖI ống có vấn đề đó, thực hiện theo đúng thứ tự:\n' +
     '1. Đọc số hiệu ống đó CẨN THẬN từng chữ số một — đặc biệt chú ý các cặp chữ số dễ nhầm khi viết tay: ' +
-    '1 và 7, 0 và 6, 3 và 8, 2 và 7, 5 và 6, 4 và 9.\n' +
+    DIGIT_CONFUSION_PAIRS + '.\n' +
     '2. Xác định ghi chú/lỗi mà ảnh THỰC SỰ ghi cho đúng ống đó, rồi ánh xạ sang mã lỗi trong danh sách sau ' +
     '(CHỈ dùng đúng mã trong danh sách, KHÔNG tự bịa mã khác, 1 ống có thể có NHIỀU mã cùng lúc):\n' +
     defectListTxt + '\n\n' +
