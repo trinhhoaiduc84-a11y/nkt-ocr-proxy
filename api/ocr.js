@@ -10,6 +10,17 @@
 // (số ống + lỗi) bên cạnh "numbers" (chỉ số ống, giữ để không phá cách dùng cũ).
 // Khâu Đóng gói (6)/Ép thủy lực (5)/không gửi "stage" → hành vi CŨ Y NGUYÊN, chỉ đọc số.
 //
+// v64: FILE BACKEND NÀY DÙNG CHUNG CHO CẢ "Phiên bản 1" (chỉ đọc số) VÀ "Phiên bản 2" (đọc số +
+// nhận diện lỗi) của app — không cần 2 file backend riêng, vì cơ chế bật/tắt nhận diện lỗi vốn đã
+// dựa hoàn toàn vào việc app có gửi "stage" hợp lệ (0-4) hay không. App bản "Phiên bản 1" đơn giản
+// KHÔNG gửi "stage" nữa (xem OCR_DEFECTS_ENABLED trong file .html) → backend tự động chỉ đọc số,
+// tiết kiệm hẳn 1 lượt gọi AI (rẻ hơn, nhanh hơn). App bản "Phiên bản 2" gửi "stage" như cũ → có cả
+// 2. Bản v64 này còn: (1) viết sâu lại toàn bộ hướng dẫn đọc số (SERIAL_READING_STEPS) — thêm bước
+// quét toàn ảnh, đọc 2 lượt đối chiếu, nói rõ KHÔNG được tóm tắt danh sách dài; (2) tăng max_tokens
+// lệnh đọc số 2048→4096 + thêm cơ chế cứu dữ liệu (extractBareJsonArray) phòng khi bị cắt giữa
+// chừng; (3) hardcode thêm thuật ngữ riêng khâu Sửa ren (hỏng ren/hỏng CL/tiện ren mới/thay CL mới)
+// và siết chặt quy tắc "không chắc thì bỏ qua, không tự đoán" cho cả lỗi lẫn trạng thái xử lý.
+//
 // TẠI SAO ĐỔI TỪ CLOUDFLARE SANG VERCEL: bản chạy trên Cloudflare Worker bị Anthropic
 // chặn với lỗi "403 forbidden — Request not allowed" — nhiều khả năng do lưu lượng gọi
 // TỪ hạ tầng Cloudflare Workers bị nghi ngờ là bot/lạm dụng (vấn đề hạ tầng, không phải do
@@ -94,16 +105,26 @@ const SUAREN_REPAIR = {
   'da-sua-ca-hai': 'Đã sửa ren VÀ thay Coupling (cả hai)',
 };
 
-// Đoạn hướng dẫn đọc số hiệu ống — giữ NGUYÊN VĂN phần lõi so với bản trước (v59fix), đã kiểm
-// chứng độ chính xác tốt. v63fix2: bổ sung mục 3c xử lý khoảng số VIẾT NGƯỢC (số đầu > số cuối)
-// — thực tế sổ tay có kiểu ghi "7031 → 7026" (đếm lùi), bản trước chưa nói rõ nên model có thể
-// bỏ sót/không mở rộng được, dẫn tới đọc thiếu hoặc trả lời rỗng.
+// Đoạn hướng dẫn đọc số hiệu ống — lõi giữ từ v59fix/v63fix2 (đã kiểm chứng tốt), v64 ĐI SÂU
+// THÊM theo yêu cầu KTV ("đi sâu vào phân tích, nhận diện, đọc số chính xác, đọc được các dãy số
+// dài"): thêm bước QUÉT TOÀN ẢNH trước khi đọc (không bỏ sót góc/mép/dòng chen), thêm ĐỌC 2 LƯỢT
+// (lượt 1 đọc thô, lượt 2 rà lại đối chiếu từng số với số liền kề), và nói RÕ RÀNG là danh sách dù
+// dài bao nhiêu (hàng chục/hàng trăm số) cũng PHẢI liệt kê đủ, không được tóm tắt/rút gọn/chỉ nêu
+// đại diện — đây là điểm quan trọng vì khâu Sửa ren và các khâu có dải số lớn từng bị nghi ngờ đọc
+// thiếu khi danh sách quá dài.
 const SERIAL_READING_STEPS =
-  '1. Xác định từng số hiệu ống hoặc từng ký hiệu khoảng số xuất hiện trong ảnh, theo đúng thứ tự (trái sang phải, trên xuống dưới).\n' +
-  '2. Với mỗi số, đọc CẨN THẬN từng chữ số một — đặc biệt chú ý các cặp chữ số dễ nhầm khi viết tay: ' +
-  '1 và 7, 0 và 6, 3 và 8, 2 và 7, 5 và 6, 4 và 9. Nếu nét chữ không rõ, hãy dựa vào các số liền kề ' +
-  'trong danh sách (thường có quy luật tăng/giảm dần hoặc gần nhau) để suy luận số hợp lý nhất.\n' +
-  '3. LƯU Ý CÁC KÝ HIỆU RÚT GỌN sau — PHẢI MỞ RỘNG thành đầy đủ từng số riêng lẻ trong kết quả, ' +
+  '1. QUÉT TOÀN BỘ ẢNH trước khi đọc số nào — kiểm tra hết các góc, mép ảnh, các dòng viết chen/viết ' +
+  'thêm ngoài lề, các cột phụ nếu có, để chắc chắn không bỏ sót bất kỳ số hiệu ống hay ký hiệu khoảng ' +
+  'số nào xuất hiện trong ảnh (kể cả những chỗ mờ, bị che một phần, hoặc viết nhỏ ở rìa).\n' +
+  '2. Xác định từng số hiệu ống hoặc từng ký hiệu khoảng số, theo đúng thứ tự xuất hiện (trái sang ' +
+  'phải, trên xuống dưới, hết cột này sang cột khác nếu ảnh có nhiều cột).\n' +
+  '3. ĐỌC 2 LƯỢT cho MỖI số: lượt 1 đọc thô toàn bộ chữ số; lượt 2 rà lại từng chữ số một lần nữa, ' +
+  'đối chiếu với các số liền kề trong danh sách (thường tăng/giảm dần hoặc gần nhau) để phát hiện chỗ ' +
+  'khả năng đọc nhầm — đặc biệt chú ý các cặp chữ số dễ nhầm khi viết tay: 1 và 7, 0 và 6, 3 và 8, ' +
+  '2 và 7, 5 và 6, 4 và 9. Nếu nét chữ không rõ, dùng quy luật của các số liền kề để chọn chữ số hợp ' +
+  'lý nhất — LUÔN đưa ra số cụ thể (không được bỏ trống một số chỉ vì không chắc 100%, đây là việc ' +
+  'khác với việc nhận diện lỗi — số ống thì luôn phải có kết quả, dù là suy luận tốt nhất).\n' +
+  '4. LƯU Ý CÁC KÝ HIỆU RÚT GỌN sau — PHẢI MỞ RỘNG thành đầy đủ từng số riêng lẻ trong kết quả, ' +
   'không được giữ nguyên dạng rút gọn:\n' +
   '   a. Hai số nối bằng MŨI TÊN (→, ->) hoặc DẤU GẠCH NGANG (-) nghĩa là một KHOẢNG liên tục — ' +
   'liệt kê TẤT CẢ các số nguyên từ số đầu đến số cuối, bao gồm cả 2 đầu mút. ' +
@@ -116,7 +137,11 @@ const SERIAL_READING_STEPS =
   '   c. Nếu số ĐẦU LỚN HƠN số CUỐI (khoảng viết ngược/đếm lùi, VD "7031 → 7026"), vẫn PHẢI mở ' +
   'rộng đủ theo chiều giảm dần: "7031 → 7026" nghĩa là 6 số: 7031,7030,7029,7028,7027,7026. ' +
   'KHÔNG được bỏ qua hay để trống chỉ vì khoảng viết theo chiều giảm.\n' +
-  '4. Sau khi đọc và mở rộng hết các khoảng, đếm lại xem đã liệt kê đủ chưa — không bỏ sót, ' +
+  '5. DANH SÁCH DÀI (vài chục đến vài trăm số, nhiều khoảng nối tiếp nhau): PHẢI liệt kê ĐẦY ĐỦ TỪNG ' +
+  'SỐ MỘT trong kết quả cuối cùng, TUYỆT ĐỐI KHÔNG được tóm tắt, viết tắt, chỉ nêu vài số đại diện, ' +
+  'hay dừng giữa chừng vì danh sách dài — cứ tiếp tục liệt kê cho tới khi hết toàn bộ số có trong ảnh, ' +
+  'dù kết quả cuối cùng có nhiều phần tử.\n' +
+  '6. Sau khi đọc và mở rộng hết các khoảng, đếm lại xem đã liệt kê đủ chưa — không bỏ sót, ' +
   'không thêm số không có thật, không để sót ký hiệu mũi tên/gạch ngang nào chưa mở rộng trong kết quả.';
 
 // v63fix2: NDT hay dùng thuật ngữ tiếng Anh viết tắt "Cross"/"Line" (hướng vết nứt: ngang/dọc)
@@ -128,60 +153,90 @@ const NDT_CROSS_LINE_NOTE =
   '(vết nứt ngang) hoặc "Line"/"Line def." (vết nứt dọc) — CẢ HAI đều là vết nứt, LUÔN ánh xạ về mã ' +
   '"nut-than" (Nứt thân), không phân biệt ngang/dọc (app không có mã riêng cho từng hướng).';
 
+// v64: KTV chỉ rõ sổ tay khâu Sửa ren hay dùng thuật ngữ/viết tắt riêng của xưởng cho cả LỖI lẫn
+// TRẠNG THÁI XỬ LÝ — model không tự biết quy ước này nếu không nói rõ, nên hardcode thẳng vào
+// prompt, tương tự cách đã làm với NDT_CROSS_LINE_NOTE ở trên.
+const SUAREN_TERMINOLOGY_NOTE =
+  '\n\nLƯU Ý THUẬT NGỮ RIÊNG CHO KHÂU SỬA REN — sổ tay xưởng hay ghi tắt, PHẢI ánh xạ ĐÚNG như sau ' +
+  '(ưu tiên các quy ước này hơn suy đoán chung chung):\n' +
+  '  - Ghi "hỏng ren" (hoặc "hư ren", "ren hỏng", "ren hư") cho 1 ống → mã lỗi "hong-ren" (Hỏng ren).\n' +
+  '  - Ghi "hỏng CL" (hoặc "CL hỏng", "hư CL" — "CL" là viết tắt của "Coupling") → mã lỗi ' +
+  '"hong-coupling" (Hỏng Coupling).\n' +
+  '  - Ghi CẢ HAI cho cùng 1 ống ("hỏng ren + CL", "hỏng ren, hỏng CL", "hỏng ren và coupling") → ' +
+  'mã lỗi "hong-ren-coupling".\n' +
+  '  - Ghi "tiện ren mới" (hoặc "đã tiện ren", "tiện lại ren", "tiện ren") → mã TRẠNG THÁI XỬ LÝ ' +
+  '(repair) "da-sua-ren" (Đã sửa ren — tiện ren mới).\n' +
+  '  - Ghi "thay CL mới" (hoặc "đã thay CL", "thay coupling mới", "thay CL") → mã TRẠNG THÁI XỬ LÝ ' +
+  '(repair) "da-thay-coupling" (Đã thay Coupling mới).\n' +
+  '  - Ghi CẢ HAI việc xử lý cho cùng 1 ống → mã TRẠNG THÁI XỬ LÝ "da-sua-ca-hai".\n' +
+  '  - LƯU Ý: mã LỖI (defects) và mã TRẠNG THÁI XỬ LÝ (repair) là 2 TRƯỜNG KHÁC NHAU trong kết quả ' +
+  '— "hỏng ren"/"hỏng CL" LUÔN là lỗi (defects), "tiện ren mới"/"thay CL mới" LUÔN là trạng thái xử ' +
+  'lý (repair), KHÔNG được lẫn lộn 2 loại này với nhau.';
+
+// v63fix4: prompt đọc số giờ CHỈ có 1 bản DUY NHẤT, dùng cho MỌI trường hợp (có nhận diện lỗi
+// hay không) — không còn "trộn" thêm yêu cầu lỗi vào chung 1 lượt gọi nữa (xem giải thích đầy đủ
+// ở buildDefectsOnlyPrompt() và trong handler). Giữ tham số withDefects cho tương thích ngược
+// nhưng thực chất giờ luôn trả về prompt giống nhau.
 function buildPrompt(stageNum, withDefects) {
-  if (!withDefects) {
-    // Hành vi CŨ y nguyên (dùng cho khâu Đóng gói hoặc khi không gửi "stage").
-    return (
-      'Đây là ảnh chụp danh sách số hiệu ống (pipe serial number), viết tay hoặc in, của một xưởng kiểm tra ống thép.\n\n' +
-      'Hãy đọc theo các bước sau:\n' + SERIAL_READING_STEPS + '\n\n' +
-      'CHỈ trả lời bằng một mảng JSON thuần các chuỗi số (mỗi số 1 phần tử, đã mở rộng hết khoảng), ' +
-      'không kèm bất kỳ chữ giải thích, markdown, hay ký tự nào khác.\n' +
-      'Ví dụ đúng định dạng: ["7115","7136","7113"]\n' +
-      'Nếu không đọc được số nào, trả lời: []'
-    );
-  }
+  return (
+    'Đây là ảnh chụp danh sách số hiệu ống (pipe serial number), viết tay hoặc in, của một xưởng kiểm tra ống thép.\n\n' +
+    'Hãy đọc theo các bước sau:\n' + SERIAL_READING_STEPS + '\n\n' +
+    'CHỈ trả lời bằng một mảng JSON thuần các chuỗi số (mỗi số 1 phần tử, đã mở rộng hết khoảng), ' +
+    'không kèm bất kỳ chữ giải thích, markdown, hay ký tự nào khác.\n' +
+    'Ví dụ đúng định dạng: ["7115","7136","7113"]\n' +
+    'Nếu không đọc được số nào, trả lời: []'
+  );
+}
+
+// v63fix4: TÁCH RIÊNG hẳn phần "tìm ống có lỗi" ra thành 1 prompt độc lập, KHÔNG còn gộp chung
+// với việc đọc số (xem giải thích trong handler — nghi vấn việc bắt AI làm nhiều việc 1 lúc làm
+// giảm độ chính xác đọc số, nhất là khâu Sửa ren vốn có thêm cả mục "đã xử lý"). Prompt này không
+// cần yêu cầu liệt kê MỌI số ống — chỉ cần đọc đúng số của những ống THỰC SỰ có vấn đề, vì "numbers"
+// đầy đủ đã có sẵn từ lệnh gọi riêng (buildPrompt) — 2 lệnh chạy song song, không tăng thời gian chờ.
+function buildDefectsOnlyPrompt(stageNum) {
   const stageName = STAGE_NAMES[stageNum] || '';
   const allowedDefects = stageDefectKeys(stageNum);
   const defectListTxt = allowedDefects.map(k => `  - "${k}": ${DEFECTS[k]}`).join('\n');
   const repairSection = (stageNum === 4)
-    ? ('\n\nBƯỚC 3 (CHỈ áp dụng vì đây là khâu Sửa ren) — với mỗi ống, nếu ảnh có ghi rõ TRẠNG THÁI ĐÃ ' +
-       'XỬ LÝ (VD cột "đã sửa"/"kết quả xử lý"/dấu tick riêng biệt với lỗi), ánh xạ sang ĐÚNG MỘT mã sau ' +
-       '(hoặc để null nếu ảnh không ghi rõ trạng thái xử lý cho ống đó):\n' +
-       Object.entries(SUAREN_REPAIR).map(([k, v]) => `  - "${k}": ${v}`).join('\n'))
+    ? ('\n\nVới mỗi ống có lỗi ở trên, NẾU ảnh có ghi rõ TRẠNG THÁI ĐÃ XỬ LÝ RIÊNG (VD cột "đã sửa"/' +
+       '"kết quả xử lý"/dấu tick tách biệt với cột lỗi), ánh xạ THÊM sang ĐÚNG MỘT mã sau:\n' +
+       Object.entries(SUAREN_REPAIR).map(([k, v]) => `  - "${k}": ${v}`).join('\n') +
+       '\nNẾU ảnh KHÔNG ghi rõ ràng trạng thái xử lý, hoặc không chắc chắn đúng mã nào trong 3 mã trên ' +
+       '— để "repair" là null, TUYỆT ĐỐI KHÔNG tự đoán đại 1 mã.')
     : '';
   const ndtNote = (stageNum === 3) ? NDT_CROSS_LINE_NOTE : '';
-  // v63fix2: TÁCH "numbers" (đầy đủ, mọi ống đọc được) ra khỏi "pipes" (CHỈ ống có lỗi/đã xử lý)
-  // — 2 lý do: (1) an toàn — nếu phần "pipes" bị lỗi định dạng/bị cắt giữa chừng (ảnh nhiều ống,
-  // model sinh chữ dài dễ vượt giới hạn thời gian 25s của Vercel Edge Function), "numbers" vẫn
-  // đứng riêng nên KHÔNG bị mất theo, ít nhất vẫn đọc được số ống như tính năng gốc; (2) nhanh
-  // hơn — đa số ống trong 1 ảnh thường "Đạt", liệt kê cả những ống đó vào "pipes" là dư thừa,
-  // chỉ cần liệt kê ống có vấn đề giúp model trả lời ngắn hơn nhiều → ít khả năng bị cắt/timeout.
+  const suarenNote = (stageNum === 4) ? SUAREN_TERMINOLOGY_NOTE : '';
   return (
     `Đây là ảnh chụp SỔ/BẢNG GHI CHÉP kiểm tra ống thép tại khâu "${stageName}" của một xưởng kiểm tra ống. ` +
     'Sổ có thể ở BẤT KỲ định dạng nào — bảng kẻ ô in sẵn, sổ tay viết tay tự do, danh sách đơn giản, ảnh chụp ' +
     'Excel, v.v. Hãy TỰ THÍCH ỨNG với định dạng thực tế trong ảnh, KHÔNG giả định trước cấu trúc cột.\n\n' +
-    'Thực hiện theo đúng các bước sau:\n\n' +
-    'BƯỚC 1 — ĐỌC SỐ HIỆU ỐNG (TOÀN BỘ, kể cả ống không có lỗi gì):\n' + SERIAL_READING_STEPS + '\n\n' +
-    'BƯỚC 2 — CHỈ với những ống THỰC SỰ có ghi chú/lỗi (bỏ qua hoàn toàn ống bình thường/"Đạt"/không ' +
-    'có ghi chú gì), xác định ghi chú đó là gì rồi ánh xạ sang mã lỗi trong danh sách sau (CHỈ được dùng ' +
-    'đúng mã trong danh sách, KHÔNG tự bịa mã khác, một ống có thể có NHIỀU mã cùng lúc nếu ảnh ghi rõ ' +
-    'nhiều vấn đề):\n' +
+    'NHIỆM VỤ DUY NHẤT của bạn: tìm CÁC ỐNG CÓ LỖI/GHI CHÚ VẤN ĐỀ RÕ RÀNG trong ảnh — bỏ qua HẲN những ' +
+    'ống bình thường/"Đạt"/không có ghi chú gì (KHÔNG cần liệt kê hết mọi ống trong ảnh, chỉ cần những ' +
+    'ống có vấn đề).\n\n' +
+    'Với MỖI ống có vấn đề đó, thực hiện theo đúng thứ tự:\n' +
+    '1. Đọc số hiệu ống đó CẨN THẬN từng chữ số một — đặc biệt chú ý các cặp chữ số dễ nhầm khi viết tay: ' +
+    '1 và 7, 0 và 6, 3 và 8, 2 và 7, 5 và 6, 4 và 9.\n' +
+    '2. Xác định ghi chú/lỗi mà ảnh THỰC SỰ ghi cho đúng ống đó, rồi ánh xạ sang mã lỗi trong danh sách sau ' +
+    '(CHỈ dùng đúng mã trong danh sách, KHÔNG tự bịa mã khác, 1 ống có thể có NHIỀU mã cùng lúc):\n' +
     defectListTxt + '\n\n' +
+    'QUAN TRỌNG NHẤT — QUY TẮC "KHÔNG CHẮC THÌ BỎ QUA" (đọc kỹ trước khi làm bước dưới):\n' +
+    'NẾU KHÔNG CHẮC CHẮN — dù là không chắc ống đó có thực sự lỗi hay không, không chắc đúng lỗi nào trong ' +
+    'các mã ở trên, hay (với khâu Sửa ren) không chắc trạng thái xử lý là gì — THÌ TUYỆT ĐỐI KHÔNG được tự ' +
+    'đoán, KHÔNG tự chọn đại một mã nào, và BỎ QUA HẲN ống đó (không đưa vào kết quả "pipes"), để KTV tự ' +
+    'xem ảnh gốc và chọn tay. Thà bỏ sót còn hơn tự tick sai — tick sai KTV dễ không để ý mà bỏ qua luôn, ' +
+    'còn bỏ sót thì KTV vẫn thấy ống đó cần xem lại khi rà danh sách.\n\n' +
     'Quy tắc ánh xạ lỗi (RẤT QUAN TRỌNG):\n' +
-    '  - Chỉ gán lỗi cho ống nếu ảnh THỰC SỰ có ghi chú/ký hiệu/dấu tick/khoanh tròn/gạch chéo/chữ viết tay ' +
-    'chỉ rõ vấn đề cho đúng ống đó — TUYỆT ĐỐI KHÔNG suy đoán hay gán lỗi cho ống không có ghi chú gì.\n' +
-    '  - Nếu ghi chú rõ ràng có ý nghĩa "có vấn đề/lỗi/loại/reject" (VD dấu X, gạch chéo, khoanh đỏ, chữ ' +
-    '"hỏng"/"loại"/"reject"...) nhưng KHÔNG xác định được đúng loại lỗi cụ thể trong danh sách, dùng mã ' +
-    '"khac" NẾU danh sách trên có mã đó; nếu danh sách không có "khac" thì bỏ qua, không gán mã nào.\n' +
-    '  - Ống KHÔNG có ghi chú đặc biệt gì → BỎ QUA HẲN, không thêm vào "pipes" (xem định dạng JSON bên dưới).' +
-    repairSection + ndtNote + '\n\n' +
-    'CHỈ trả lời bằng một object JSON DUY NHẤT theo đúng định dạng sau, không kèm chữ giải thích, không ' +
-    'markdown. Trả "numbers" TRƯỚC (đầy đủ mọi ống đọc được ở Bước 1), rồi mới tới "pipes" (CHỈ ống có ' +
-    'lỗi/đã xử lý xác định được ở Bước 2' + (stageNum === 4 ? '/Bước 3' : '') + ' — ống bình thường KHÔNG liệt kê vào đây):\n' +
-    '{"numbers":["7113","7114","7115"],"pipes":[{"serial":"7115","defects":["' + (allowedDefects[0] || 'khac') + '"]' +
+    '  - Chỉ gán lỗi khi ảnh THỰC SỰ có ghi chú/ký hiệu/dấu tick/khoanh tròn/gạch chéo/chữ viết tay chỉ RÕ ' +
+    'RÀNG, KHÔNG MẬP MỜ vấn đề cho đúng ống đó — TUYỆT ĐỐI KHÔNG suy đoán (xem quy tắc "không chắc thì bỏ ' +
+    'qua" ở trên).\n' +
+    '  - Ghi chú rõ ràng có ý nghĩa "có vấn đề/lỗi/loại/reject" (dấu X, gạch chéo, khoanh đỏ, chữ ' +
+    '"hỏng"/"loại"/"reject"...) nhưng KHÔNG xác định được đúng loại cụ thể → dùng mã "khac" NẾU danh sách ' +
+    'trên có mã đó; nếu không có "khac" thì bỏ qua ống đó, không đưa vào kết quả.' +
+    repairSection + ndtNote + suarenNote + '\n\n' +
+    'CHỈ trả lời bằng 1 object JSON DUY NHẤT theo đúng định dạng sau, không kèm chữ giải thích, không markdown:\n' +
+    '{"pipes":[{"serial":"7115","defects":["' + (allowedDefects[0] || 'khac') + '"]' +
     (stageNum === 4 ? ',"repair":"da-sua-ren"' : '') + '}]}\n' +
-    '("numbers" ở ví dụ trên có 3 ống nhưng "pipes" chỉ có 1 — vì chỉ ống 7115 có lỗi, 7113/7114 bình thường nên không liệt kê.)\n' +
-    'Nếu không đọc được số ống nào: {"numbers":[],"pipes":[]}'
+    'Không có ống nào có vấn đề: {"pipes":[]}'
   );
 }
 
@@ -191,10 +246,10 @@ function buildPrompt(stageNum, withDefects) {
 // nguyên khối rồi mất trắng cả object nếu chỉ 1 ký tự cuối bị thiếu. Theo dõi độ sâu ngoặc
 // []/{} và trạng thái trong-chuỗi để tìm đúng dấu ']' khớp; nếu không tìm thấy (bị cắt), cắt bớt
 // về phần tử hoàn chỉnh gần cuối cùng rồi tự đóng ']' lại để JSON.parse phần còn cứu được.
-function extractArrayField(rawText, key) {
-  const keyIdx = rawText.indexOf('"' + key + '"');
-  if (keyIdx === -1) return null;
-  const bracketIdx = rawText.indexOf('[', keyIdx);
+// v64: logic salvage dùng chung, tách khỏi extractArrayField() để tái dùng cho cả trường hợp không
+// có "key" bao ngoài (VD "numbers" giờ cũng cần cứu dữ liệu khi bị cắt — trước v64 chỉ áp dụng cho
+// "pipes", nhưng numbers còn quan trọng hơn nên cũng cần cơ chế này, xem extractBareJsonArray()).
+function extractArraySliceFrom(rawText, bracketIdx) {
   if (bracketIdx === -1) return null;
   let depth = 0, inStr = false, esc = false, endIdx = -1;
   for (let i = bracketIdx; i < rawText.length; i++) {
@@ -236,6 +291,54 @@ function extractArrayField(rawText, key) {
     slice = (cut !== -1) ? (slice.slice(0, cut + 1) + ']') : '[]';
   }
   try { return JSON.parse(slice); } catch (e) { return null; }
+}
+function extractArrayField(rawText, key) {
+  const keyIdx = rawText.indexOf('"' + key + '"');
+  if (keyIdx === -1) return null;
+  const bracketIdx = rawText.indexOf('[', keyIdx);
+  return extractArraySliceFrom(rawText, bracketIdx);
+}
+// v64: prompt đọc số trả về 1 mảng JSON THUẦN (không bọc trong object/key) — tìm dấu '[' đầu tiên
+// trong text rồi áp dụng đúng cơ chế salvage như extractArrayField() để cứu dữ liệu nếu bị cắt
+// giữa chừng (model chạm max_tokens hoặc mất kết nối giữa chừng), thay vì mất trắng cả danh sách
+// số chỉ vì thiếu 1 ký tự cuối.
+function extractBareJsonArray(rawText) {
+  const bracketIdx = rawText.indexOf('[');
+  return extractArraySliceFrom(rawText, bracketIdx);
+}
+
+// v63fix4: gọi Claude 1 lần, trả về text thuần (throw kèm .detail/.status khi lỗi để handler
+// dựng đúng response lỗi như trước — tách ra thành hàm riêng vì giờ handler gọi hàm này 2 LẦN
+// song song khi có nhận diện lỗi, xem giải thích trong handler).
+async function callClaude(apiKey, model, prompt, image, mime, maxTokens) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: model,
+      max_tokens: maxTokens,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mime || 'image/jpeg', data: image } },
+          { type: 'text', text: prompt },
+        ],
+      }],
+    }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    const err = new Error('Lỗi gọi Claude: ' + res.status);
+    err.detail = errText;
+    err.status = res.status;
+    throw err;
+  }
+  const data = await res.json();
+  return (data?.content || []).filter(b => b && b.type === 'text').map(b => b.text).join('\n');
 }
 
 export default async function handler(request) {
@@ -291,103 +394,108 @@ export default async function handler(request) {
     // Khâu Đóng gói (6)/Ép thủy lực (5)/không gửi stage → giữ hành vi cũ (chỉ đọc số).
     const stageNum = Number.isInteger(stage) ? stage : parseInt(stage, 10);
     const withDefects = Number.isFinite(stageNum) && stageNum >= 0 && stageNum <= 4;
-
-    const prompt = buildPrompt(stageNum, withDefects);
     const model = 'claude-haiku-4-5-20251001'; // rẻ + nhanh — bản so sánh: ocr-sonnet.js / ocr-opus.js
 
-    const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: model,
-        // v63fix2: hạ từ 4096 xuống 3072 — từ khi "pipes" chỉ liệt kê ống có lỗi (không liệt kê
-        // hết mọi ống nữa), nhu cầu thực tế thấp hơn nhiều; hạ giới hạn giúp giảm rủi ro chạm mốc
-        // 25s timeout cứng của Vercel Edge Function (xem ghi chú ở buildPrompt).
-        max_tokens: withDefects ? 3072 : 2048,
-        messages: [{
-          role: 'user',
-          content: [
-            {
-              type: 'image',
-              source: { type: 'base64', media_type: mime || 'image/jpeg', data: image },
-            },
-            { type: 'text', text: prompt },
-          ],
-        }],
-      }),
-    });
+    // v63fix4: GỌI RIÊNG 2 LỆNH ĐỘC LẬP SONG SONG khi có nhận diện lỗi — 1 lệnh CHỈ đọc số (dùng
+    // ĐÚNG prompt đơn giản, ổn định từ trước, không đổi 1 chữ), 1 lệnh RIÊNG chỉ tìm ống có lỗi.
+    // LÝ DO: KTV phản ánh khâu Sửa ren (prompt dài/phức tạp nhất vì có thêm mục "đã xử lý") đọc SỐ
+    // kém hẳn so với khâu khác dù cùng model — nghi vấn hợp lý là bắt AI làm nhiều việc cùng lúc
+    // (đọc số + phân loại nhiều mã lỗi + xác định trạng thái xử lý) trong 1 lượt duy nhất làm GIẢM
+    // độ tập trung cho từng việc, nhất là việc ĐỌC SỐ — vốn quan trọng nhất (sai số ống ảnh hưởng
+    // cả phiếu, còn sai/thiếu lỗi thì KTV vẫn xem lại và tự chọn được). Tách riêng để việc đọc số
+    // LUÔN dùng đúng 1 prompt đơn giản, không lẫn yêu cầu nào khác, bất kể khâu nào. Chạy song song
+    // (Promise.allSettled) nên KHÔNG tăng thời gian chờ so với trước; nếu lệnh lỗi thất bại, số ống
+    // đọc được ở lệnh kia VẪN giữ nguyên — chỉ mất phần tự động tích lỗi round đó.
+    const numbersPrompt = buildPrompt(stageNum, false);
+    let numbersRawText, defectsRawText = null;
 
-    if (!claudeRes.ok) {
-      const errText = await claudeRes.text();
-      // Kèm thông tin độ dài + vài ký tự đầu của key (KHÔNG lộ toàn bộ key) để biết ngay key
-      // đang dùng có đúng dạng "sk-ant-api03-..." và độ dài hợp lý (~100+ ký tự) hay không,
-      // phòng trường hợp key bị cắt/thiếu ký tự khi copy-paste vào Vercel.
-      const keyInfo = 'Key hiện dùng: ' + apiKey.length + ' ký tự, bắt đầu bằng "' + apiKey.slice(0, 12) + '..."';
-      return new Response(JSON.stringify({ error: 'Lỗi gọi Claude: ' + claudeRes.status, detail: errText + ' | ' + keyInfo }), {
-        status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    const claudeData = await claudeRes.json();
-    const rawText = (claudeData?.content || [])
-      .filter(b => b && b.type === 'text')
-      .map(b => b.text)
-      .join('\n');
-
-    // v63fix2: "numbers" và "pipes" giờ ĐỘC LẬP với nhau — trích riêng từng trường thay vì phải
-    // JSON.parse trọn 1 object rồi mất trắng cả hai nếu chỉ 1 phần bị lỗi/bị cắt. Thử JSON.parse
-    // nguyên khối trước (đường nhanh, đa số trường hợp); nếu hỏng mới rơi xuống trích riêng từng
-    // trường bằng extractArrayField() (có khả năng cứu dữ liệu khi bị cắt giữa chừng).
-    let numbersRaw = null, pipesRaw = null;
     if (withDefects) {
-      const objMatch = rawText.match(/\{[\s\S]*\}/);
-      let wholeOk = false;
-      if (objMatch) {
-        try {
-          const parsed = JSON.parse(objMatch[0]);
-          numbersRaw = Array.isArray(parsed.numbers) ? parsed.numbers : null;
-          pipesRaw = Array.isArray(parsed.pipes) ? parsed.pipes : null;
-          wholeOk = true;
-        } catch (e) { /* rơi xuống trích riêng từng trường bên dưới */ }
+      const defectsPrompt = buildDefectsOnlyPrompt(stageNum);
+      const [numResult, defResult] = await Promise.allSettled([
+        // v64: bump 2048→4096 cho lệnh đọc số — danh sách rất dài (nhiều khoảng nối tiếp, hàng
+        // trăm số) có thể vượt 2048 token và bị CẮT GIỮA CHỪNG trước đây. Chạy song song với lệnh
+        // lỗi (không tăng thời gian chờ), và sinh ra dãy số thuần (rẻ/nhanh) nên tăng token không
+        // đáng kể tới độ trễ thực tế trong hầu hết trường hợp.
+        callClaude(apiKey, model, numbersPrompt, image, mime, 4096),
+        callClaude(apiKey, model, defectsPrompt, image, mime, 2048),
+      ]);
+      if (numResult.status === 'rejected') {
+        const e = numResult.reason;
+        const keyInfo = 'Key hiện dùng: ' + apiKey.length + ' ký tự, bắt đầu bằng "' + apiKey.slice(0, 12) + '..."';
+        return new Response(JSON.stringify({ error: (e && e.message) || 'Lỗi gọi Claude', detail: ((e && e.detail) || '') + ' | ' + keyInfo }), {
+          status: (e && e.status) || 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
       }
-      if (!wholeOk || numbersRaw === null) numbersRaw = extractArrayField(rawText, 'numbers');
-      if (!wholeOk || pipesRaw === null) pipesRaw = extractArrayField(rawText, 'pipes');
+      numbersRawText = numResult.value;
+      if (defResult.status === 'fulfilled') defectsRawText = defResult.value;
+      // defResult bị lỗi (mạng/timeout riêng lệnh lỗi) → defectsRawText giữ null, coi như "không
+      // tìm được ống lỗi nào" — numbers vẫn trả về đầy đủ, KTV chọn lỗi tay bình thường.
     } else {
-      // Hành vi CŨ y nguyên: model trả về 1 mảng JSON thuần các số (không có "pipes").
-      const arrMatch = rawText.match(/\[[\s\S]*\]/);
-      if (arrMatch) {
-        try {
-          const parsed = JSON.parse(arrMatch[0]);
-          if (Array.isArray(parsed)) numbersRaw = parsed;
-        } catch (e) { /* để null — numbers rỗng, app báo "không đọc được" */ }
+      try {
+        numbersRawText = await callClaude(apiKey, model, numbersPrompt, image, mime, 4096); // v64: xem giải thích ở nhánh withDefects
+      } catch (e) {
+        const keyInfo = 'Key hiện dùng: ' + apiKey.length + ' ký tự, bắt đầu bằng "' + apiKey.slice(0, 12) + '..."';
+        return new Response(JSON.stringify({ error: (e && e.message) || 'Lỗi gọi Claude', detail: ((e && e.detail) || '') + ' | ' + keyInfo }), {
+          status: (e && e.status) || 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
       }
     }
 
+    // Trích "numbers" — LUÔN từ 1 mảng JSON thuần (prompt đọc số không đổi bất kể withDefects).
+    // v64: thử parse thẳng trước (đường nhanh, đủ dùng khi JSON nguyên vẹn); nếu lỗi (JSON bị cắt
+    // giữa chừng vì chạm max_tokens hay mất kết nối) → rơi xuống extractBareJsonArray() để CỨU phần
+    // danh sách đã đọc được thay vì trả về rỗng hoàn toàn (đặc biệt quan trọng với danh sách dài).
+    let numbersRaw = null;
+    const arrMatch = numbersRawText.match(/\[[\s\S]*\]/);
+    if (arrMatch) {
+      try {
+        const parsed = JSON.parse(arrMatch[0]);
+        if (Array.isArray(parsed)) numbersRaw = parsed;
+      } catch (e) { /* rơi xuống salvage bên dưới */ }
+    }
+    if (numbersRaw === null) {
+      const salvaged = extractBareJsonArray(numbersRawText);
+      if (Array.isArray(salvaged)) numbersRaw = salvaged;
+    }
     const numbers = Array.isArray(numbersRaw)
       ? [...new Set(numbersRaw.map(String).map(s => s.trim()).filter(Boolean))]
       : [];
+    const numbersSet = new Set(numbers);
 
+    // Trích "pipes" từ lệnh gọi RIÊNG (defectsRawText) — dùng extractArrayField() để cứu dữ liệu
+    // nếu bị cắt giữa chừng, giống cơ chế v63fix2 trước đây nhưng giờ áp dụng cho lệnh gọi độc lập.
     let pipesOut = [];
-    if (withDefects && Array.isArray(pipesRaw)) {
-      const allowedDefects = stageDefectKeys(stageNum);
-      pipesRaw.forEach(p => {
-        if (!p || !p.serial) return;
-        const serial = String(p.serial).trim();
-        if (!serial) return;
-        const defects = Array.isArray(p.defects)
-          ? [...new Set(p.defects.map(String).filter(k => allowedDefects.includes(k)))]
-          : [];
-        let repair = null;
-        if (stageNum === 4 && p.repair && Object.prototype.hasOwnProperty.call(SUAREN_REPAIR, String(p.repair))) {
-          repair = String(p.repair);
-        }
-        if (!defects.length && !repair) return; // phòng khi model lỡ liệt kê cả ống bình thường — vẫn lọc bỏ ở tầng proxy
-        pipesOut.push({ serial, defects, repair });
-      });
+    if (withDefects && defectsRawText) {
+      let pipesRaw = null;
+      const objMatch = defectsRawText.match(/\{[\s\S]*\}/);
+      if (objMatch) {
+        try {
+          const parsed = JSON.parse(objMatch[0]);
+          pipesRaw = Array.isArray(parsed.pipes) ? parsed.pipes : null;
+        } catch (e) { /* rơi xuống trích riêng bên dưới */ }
+      }
+      if (pipesRaw === null) pipesRaw = extractArrayField(defectsRawText, 'pipes');
+      if (Array.isArray(pipesRaw)) {
+        const allowedDefects = stageDefectKeys(stageNum);
+        pipesRaw.forEach(p => {
+          if (!p || !p.serial) return;
+          const serial = String(p.serial).trim();
+          if (!serial) return;
+          // v63fix4: CHỈ giữ ống có mặt trong "numbers" (lệnh đọc số riêng, đáng tin cậy hơn vì
+          // không bị lẫn việc khác) — phòng khi lệnh tìm lỗi đọc nhầm 1 số không khớp ống nào thật;
+          // ống bị loại ở đây vẫn không mất gì vì KTV luôn xem lại danh sách trước khi lưu.
+          if (!numbersSet.has(serial)) return;
+          const defects = Array.isArray(p.defects)
+            ? [...new Set(p.defects.map(String).filter(k => allowedDefects.includes(k)))]
+            : [];
+          let repair = null;
+          if (stageNum === 4 && p.repair && Object.prototype.hasOwnProperty.call(SUAREN_REPAIR, String(p.repair))) {
+            repair = String(p.repair);
+          }
+          if (!defects.length && !repair) return;
+          pipesOut.push({ serial, defects, repair });
+        });
+      }
     }
 
     return new Response(JSON.stringify({ numbers, pipes: pipesOut }), {
