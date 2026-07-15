@@ -4,11 +4,41 @@
 // và Đóng gói & Phân loại).
 //
 // v63: MỞ RỘNG — trước đây chỉ đọc SỐ HIỆU ỐNG. Từ bản này, khi gọi kèm tham số
-// "stage" (khâu hiện tại, 0-4: Tiếp nhận/Khu rửa/Thông nòng/NDT/Sửa ren), AI sẽ
-// ĐỌC LUÔN cả GHI CHÚ LỖI của từng ống trong ảnh sổ tay/bảng kiểm tra (nếu có) và
-// tự ánh xạ sang đúng mã lỗi app đang dùng cho khâu đó — trả về thêm mảng "pipes"
-// (số ống + lỗi) bên cạnh "numbers" (chỉ số ống, giữ để không phá cách dùng cũ).
-// Khâu Đóng gói (6)/Ép thủy lực (5)/không gửi "stage" → hành vi CŨ Y NGUYÊN, chỉ đọc số.
+// "stage" (khâu hiện tại), AI sẽ ĐỌC LUÔN cả GHI CHÚ LỖI của từng ống trong ảnh sổ
+// tay/bảng kiểm tra (nếu có) — trả về thêm mảng "pipes" (số ống + lỗi) bên cạnh
+// "numbers" (chỉ số ống, giữ để không phá cách dùng cũ).
+//
+// v64-v66: mở rộng hướng dẫn đọc số, thêm cơ chế cứu dữ liệu JSON bị cắt giữa chừng,
+// thêm thuật ngữ riêng từng khâu, và (v64) THÊM quy tắc "không chắc thì bỏ qua" để
+// tránh AI tự tick sai. HỆ QUẢ NGOÀI Ý MUỐN (KTV phản ánh 2026-07-15, có ảnh chụp thật
+// kèm theo): quy tắc "không chắc thì bỏ qua" bắt AI tự phán đoán "chắc chắn hay không"
+// rồi tự quyết định tick/bỏ — với ảnh sổ tay viết tay thực tế (nét mờ, nhiều cột), AI
+// bỏ qua GẦN NHƯ TOÀN BỘ dù nhiều ống có dấu rất rõ, vì lẫn vào các trường hợp thực sự
+// mập mờ. Điều tra kỹ cho thấy: ống có ĐỦ 2 cột lỗi rõ nét (VD "Hỏng ren"+"Hỏng CL" đều
+// có dấu X) vẫn bị bỏ qua — không phải vì ảnh mờ, mà vì tổ hợp đó không được hướng dẫn
+// rõ trong prompt cũ (chỉ có ví dụ đơn lẻ), khiến AI coi là "trường hợp lạ" rồi áp dụng
+// quy tắc an toàn "không chắc thì bỏ qua" cho CẢ pipe đó.
+//
+// v67: ĐỔI HẲN KIẾN TRÚC — không còn bắt AI tự phán đoán "chắc chắn hay không" rồi tự
+// quyết định tick/bỏ nữa. AI giờ CHỈ làm 1 việc thuần túy MÔ TẢ: với mỗi ống có đánh dấu
+// ở các cột tình trạng, liệt kê ĐÚNG cột nào có dấu (không tự kết luận lỗi cuối cùng,
+// không tự đánh giá độ tin cậy — việc mô tả lại 1 tấm ảnh đơn giản/đáng tin cậy hơn nhiều
+// so với việc tự phán đoán). Việc "tổ hợp cột nào → lỗi gì, có đủ tin cậy để tự tick hay
+// chỉ nên gợi ý cho KTV xem lại" chuyển hẳn sang CODE thuần túy bên dưới (resolveMarksForStage
+// và processDefectObservations) — logic này được unit-test đầy đủ trước khi triển khai
+// (xem /tmp/test_defect_mapping.js), không phụ thuộc hành vi khó đoán của model nữa.
+// Đúng 6 tổ hợp KTV xác nhận cho khâu Sửa ren (2026-07-15) là closed-set — tổ hợp nào
+// không khớp đúng 1 trong 6 (kể cả tổ hợp "hợp lý" như Hỏng ren+Tiện ren mới cùng lúc)
+// đều bị hạ xuống "uncertain" (trả về nhưng KHÔNG tự tick, hiện cho KTV xem lại), KHÔNG
+// còn bị mất trắng không dấu vết như trước. Ống bị lệch 1 chữ số giữa lệnh đọc số và lệnh
+// đọc lỗi (2 lệnh AI độc lập, đọc lại ảnh 2 lần) giờ cũng được GIỮ LẠI trong "uncertain"
+// thay vì bị lọc chéo âm thầm mất trắng (xem matchSerial — khớp gần đúng, Levenshtein<=1).
+// Mở rộng thêm khâu Ép thủy lực (stage=5) vào diện có AI nhận diện lỗi (trước đây chỉ
+// 2-4); khâu Thông nòng (stage=2) NGƯỢC LẠI bị RÚT khỏi diện này — nay chỉ đọc số, giống
+// Tiếp nhận/Khu rửa/Đóng gói (theo đúng yêu cầu KTV 2026-07-15). Từ v67, việc BẬT nhận
+// diện lỗi cho NDT/Sửa ren/Ép thủy lực là LỰA CHỌN TƯỜNG MINH của KTV mỗi lần chụp (nút
+// "① Chỉ đọc số"/"② Đọc số + Tick lỗi" ở app), không còn tự động theo khâu nữa — backend
+// vẫn giữ nguyên quy ước cũ: CHỈ bật khi client gửi kèm "stage" hợp lệ.
 //
 // TẠI SAO ĐỔI TỪ CLOUDFLARE SANG VERCEL: bản chạy trên Cloudflare Worker bị Anthropic
 // chặn với lỗi "403 forbidden — Request not allowed" — nhiều khả năng do lưu lượng gọi
@@ -81,17 +111,17 @@ const DEFECTS = {
   'khac': 'Lỗi khác (rõ ràng có vấn đề nhưng không khớp mã nào ở trên)',
 };
 const STAGE_NAMES = ['Tiếp nhận', 'Khu rửa', 'Thông nòng', 'Kiểm tra NDT', 'Sửa ren', 'Ép thủy lực', 'Đóng gói & Phân loại'];
-const STAGE_DEFECT_KEYS = {
-  2: ['meo-bd', 'tac-nong', 'khac'],
-  3: ['nut-than', 'an-mon', 'mo-thanh', 'khac'],
-  4: ['hong-coupling', 'hong-ren', 'hong-ren-coupling', 'khac'],
-};
-function stageDefectKeys(stage) { return STAGE_DEFECT_KEYS[stage] || Object.keys(DEFECTS); }
 const SUAREN_REPAIR = {
   'da-sua-ren': 'Đã sửa ren (tiện ren mới)',
   'da-thay-coupling': 'Đã thay Coupling mới',
   'da-sua-ca-hai': 'Đã sửa ren VÀ thay Coupling (cả hai)',
 };
+// v67: trạng thái riêng của khâu Ép thủy lực (KHÁC hẳn defects/repair của Sửa ren/NDT) —
+// PHẢI khớp đúng key với EP_PIPE_STATUS_INFO trong app. Chỉ nhận diện các trạng thái XÌ/LOẠI
+// từ ảnh sổ tay — KHÔNG suy luận trạng thái "Đạt sau xử lý" (ok_suaren/ok_coupling/ok_both)
+// vì việc này cần xác nhận thực tế đã ép lại đạt, vượt quá khả năng đọc 1 ảnh sổ tay đơn
+// thuần — để KTV tự xác nhận tay các trạng thái đó.
+const EPTL_STATUS_NAMES = { xi_pin: 'Xì Pin', xi_coupling: 'Xì Coupling', xi_both: 'Xì Pin + Xì Coupling', loai: 'Loại' };
 
 // v64rev1: KTV dò tay 1 lượt kết quả thật, phát hiện thêm 3 cặp chữ số hay bị đọc nhầm mà bản v64
 // CHƯA liệt kê: "1 và 4", "5 và 8", "2 và 3" (trước đó chỉ có 1&7, 0&6, 3&8, 2&7, 5&6, 4&9). Gộp
@@ -164,35 +194,6 @@ const SERIAL_READING_STEPS =
   '6. Sau khi đọc và mở rộng hết các khoảng, đếm lại xem đã liệt kê đủ chưa — không bỏ sót, ' +
   'không thêm số không có thật, không để sót ký hiệu mũi tên/gạch ngang nào chưa mở rộng trong kết quả.';
 
-// v63fix2: NDT hay dùng thuật ngữ tiếng Anh viết tắt "Cross"/"Line" (hướng vết nứt: ngang/dọc)
-// — app hiện KHÔNG phân biệt 2 hướng này, cả 2 đều gộp vào "Nứt thân". Model không tự biết quy
-// ước riêng của xưởng này nếu không được nói rõ — KTV đã nhắc lại yêu cầu này 2 lần nên hardcode
-// thẳng vào prompt của khâu NDT, không phụ thuộc suy luận chung chung nữa.
-const NDT_CROSS_LINE_NOTE =
-  '\n\nLƯU Ý RIÊNG CHO KHÂU NDT: nếu ảnh ghi bằng thuật ngữ tiếng Anh viết tắt "Cross"/"Cross def." ' +
-  '(vết nứt ngang) hoặc "Line"/"Line def." (vết nứt dọc) — CẢ HAI đều là vết nứt, LUÔN ánh xạ về mã ' +
-  '"nut-than" (Nứt thân), không phân biệt ngang/dọc (app không có mã riêng cho từng hướng).';
-
-// v64: KTV chỉ rõ sổ tay khâu Sửa ren hay dùng thuật ngữ/viết tắt riêng của xưởng cho cả LỖI lẫn
-// TRẠNG THÁI XỬ LÝ — model không tự biết quy ước này nếu không nói rõ, nên hardcode thẳng vào
-// prompt, tương tự cách đã làm với NDT_CROSS_LINE_NOTE ở trên.
-const SUAREN_TERMINOLOGY_NOTE =
-  '\n\nLƯU Ý THUẬT NGỮ RIÊNG CHO KHÂU SỬA REN — sổ tay xưởng hay ghi tắt, PHẢI ánh xạ ĐÚNG như sau ' +
-  '(ưu tiên các quy ước này hơn suy đoán chung chung):\n' +
-  '  - Ghi "hỏng ren" (hoặc "hư ren", "ren hỏng", "ren hư") cho 1 ống → mã lỗi "hong-ren" (Hỏng ren).\n' +
-  '  - Ghi "hỏng CL" (hoặc "CL hỏng", "hư CL" — "CL" là viết tắt của "Coupling") → mã lỗi ' +
-  '"hong-coupling" (Hỏng Coupling).\n' +
-  '  - Ghi CẢ HAI cho cùng 1 ống ("hỏng ren + CL", "hỏng ren, hỏng CL", "hỏng ren và coupling") → ' +
-  'mã lỗi "hong-ren-coupling".\n' +
-  '  - Ghi "tiện ren mới" (hoặc "đã tiện ren", "tiện lại ren", "tiện ren") → mã TRẠNG THÁI XỬ LÝ ' +
-  '(repair) "da-sua-ren" (Đã sửa ren — tiện ren mới).\n' +
-  '  - Ghi "thay CL mới" (hoặc "đã thay CL", "thay coupling mới", "thay CL") → mã TRẠNG THÁI XỬ LÝ ' +
-  '(repair) "da-thay-coupling" (Đã thay Coupling mới).\n' +
-  '  - Ghi CẢ HAI việc xử lý cho cùng 1 ống → mã TRẠNG THÁI XỬ LÝ "da-sua-ca-hai".\n' +
-  '  - LƯU Ý: mã LỖI (defects) và mã TRẠNG THÁI XỬ LÝ (repair) là 2 TRƯỜNG KHÁC NHAU trong kết quả ' +
-  '— "hỏng ren"/"hỏng CL" LUÔN là lỗi (defects), "tiện ren mới"/"thay CL mới" LUÔN là trạng thái xử ' +
-  'lý (repair), KHÔNG được lẫn lộn 2 loại này với nhau.';
-
 // v63fix4: prompt đọc số giờ CHỈ có 1 bản DUY NHẤT, dùng cho MỌI trường hợp (có nhận diện lỗi
 // hay không) — không còn "trộn" thêm yêu cầu lỗi vào chung 1 lượt gọi nữa (xem giải thích đầy đủ
 // ở buildDefectsOnlyPrompt() và trong handler). Giữ tham số withDefects cho tương thích ngược
@@ -208,67 +209,220 @@ function buildPrompt(stageNum, withDefects) {
   );
 }
 
-// v63fix4: TÁCH RIÊNG hẳn phần "tìm ống có lỗi" ra thành 1 prompt độc lập, KHÔNG còn gộp chung
-// với việc đọc số (xem giải thích trong handler — nghi vấn việc bắt AI làm nhiều việc 1 lúc làm
-// giảm độ chính xác đọc số, nhất là khâu Sửa ren vốn có thêm cả mục "đã xử lý"). Prompt này không
-// cần yêu cầu liệt kê MỌI số ống — chỉ cần đọc đúng số của những ống THỰC SỰ có vấn đề, vì "numbers"
-// đầy đủ đã có sẵn từ lệnh gọi riêng (buildPrompt) — 2 lệnh chạy song song, không tăng thời gian chờ.
+// ═══════════════════════════════════════════════════════════════════════════
+// v67: CẤU HÌNH "CỘT TÌNH TRẠNG" THEO TỪNG KHÂU — dùng chung cho cả prompt (mô tả cho AI
+// biết cần tìm cột nào) VÀ hàm suy luận thuần túy resolveMarksForStage() bên dưới (dùng
+// đúng những mã "tag" này để tra bảng quy tắc đóng — closed-set rules).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Khâu Sửa ren (stage=4) — 4 cột thực tế theo đúng mẫu sổ tay KTV gửi (2026-07-15):
+// "Đạt / Hỏng ren / Tiện ren mới / Hỏng CL / Thay CL mới / Loại NDT".
+const SUAREN_TAG_DESC = [
+  { tag: 'hong-ren', desc: 'cột "Hỏng ren" có dấu (tick/X/gạch chéo/khoanh tròn/chữ viết) — ghi tắt có thể là "hư ren", "ren hỏng", "ren hư"' },
+  { tag: 'hong-cl', desc: 'cột "Hỏng CL" có dấu — "CL" là viết tắt "Coupling", ghi tắt có thể là "CL hỏng", "hư CL"' },
+  { tag: 'tien-ren-moi', desc: 'cột "Tiện ren mới" có dấu — ghi tắt có thể là "đã tiện ren", "tiện lại ren", "tiện ren"' },
+  { tag: 'thay-cl-moi', desc: 'cột "Thay CL mới" có dấu — ghi tắt có thể là "đã thay CL", "thay coupling mới", "thay CL"' },
+];
+// Đúng 6 tổ hợp KTV xác nhận (2026-07-15) — CHỈ 6 tổ hợp NÀY được tự tick (xem hàm
+// resolveSuarenMarks). Mọi tổ hợp khác (kể cả tổ hợp "hợp lý" như Hỏng ren+Tiện ren mới
+// cùng lúc) đều bị coi là NGOÀI QUY TẮC → gắn cờ "cần KTV xem lại", không tự tick.
+const SUAREN_RULES = [
+  { marks: ['hong-ren'], defects: ['hong-ren'], repair: null },
+  { marks: ['hong-cl'], defects: ['hong-coupling'], repair: null },
+  { marks: ['hong-ren', 'hong-cl'], defects: ['hong-ren-coupling'], repair: null },
+  { marks: ['tien-ren-moi'], defects: ['hong-ren'], repair: 'da-sua-ren' },
+  { marks: ['thay-cl-moi'], defects: ['hong-coupling'], repair: 'da-thay-coupling' },
+  { marks: ['tien-ren-moi', 'thay-cl-moi'], defects: ['hong-ren-coupling'], repair: 'da-sua-ca-hai' },
+];
+
+// Khâu NDT (stage=3) — 4 nhãn ĐỘC LẬP (không có trục "xử lý" gây mập mờ như Sửa ren) nên
+// KHÔNG cần bảng quy tắc đóng riêng — mọi tổ hợp con khác rỗng của 4 nhãn này đều hợp lệ
+// (xem resolveNdtMarks). "Cross"/"Line" (tiếng Anh viết tắt hướng vết nứt ngang/dọc) đều gộp
+// vào "nut-than"; "Thk"/"THK" (viết tắt "Thickness") gộp vào "mo-thanh".
+const NDT_TAG_DESC = [
+  { tag: 'nut-than', desc: 'ghi "nứt thân", hoặc viết tắt tiếng Anh "Cross"/"Cross def." (nứt ngang) hoặc "Line"/"Line def." (nứt dọc) — CẢ HAI đều map về "nut-than"' },
+  { tag: 'an-mon', desc: 'ghi "ăn mòn"' },
+  { tag: 'mo-thanh', desc: 'ghi "mỏng thành" (độ dày không đạt), hoặc viết tắt tiếng Anh "Thk"/"THK" (Thickness)' },
+  { tag: 'khac', desc: 'có ghi chú/dấu hiệu RÕ RÀNG là có vấn đề/loại/reject nhưng KHÔNG khớp 3 loại trên (VD chữ "loại", "reject", dấu gạch chéo không kèm ghi chú cụ thể)' },
+];
+const NDT_TAGS = NDT_TAG_DESC.map(t => t.tag);
+
+// Khâu Ép thủy lực (stage=5) — CHƯA có mẫu sổ tay thật để đối chiếu (khác Sửa ren đã có 2 ảnh
+// thật KTV gửi) — dùng thuật ngữ phổ biến nhất theo tên trạng thái đã có sẵn trong app, KTV cần
+// kiểm tra lại khi dùng thử, báo lại nếu cách ghi thực tế ở xưởng khác đi.
+const EPTL_TAG_DESC = [
+  { tag: 'xi-pin', desc: 'ghi nhận ống bị xì tại đầu Pin khi ép thử — có thể ghi "Xì Pin", "Xì đầu Pin", "Pin", hoặc chỉ "Pin" kèm dấu X/tick' },
+  { tag: 'xi-cl', desc: 'ghi nhận ống bị xì tại Coupling khi ép thử — có thể ghi "Xì CL", "Xì Coupling", "CL" kèm dấu X/tick' },
+  { tag: 'loai', desc: 'ghi chú/dấu hiệu RÕ RÀNG ống bị loại bỏ hẳn (không chỉ xì mà loại hẳn) — VD "loại", "reject", khoanh đỏ' },
+];
+const EPTL_TAGS = EPTL_TAG_DESC.map(t => t.tag);
+const EPTL_RULES = [
+  { marks: ['xi-pin'], status: 'xi_pin' },
+  { marks: ['xi-cl'], status: 'xi_coupling' },
+  { marks: ['xi-pin', 'xi-cl'], status: 'xi_both' },
+  { marks: ['loai'], status: 'loai' },
+];
+
+const STAGE_TAG_CONFIG = {
+  3: { name: 'NDT', tagDesc: NDT_TAG_DESC, kind: 'ndt' },
+  4: { name: 'Sửa ren', tagDesc: SUAREN_TAG_DESC, kind: 'suaren' },
+  5: { name: 'Ép thủy lực', tagDesc: EPTL_TAG_DESC, kind: 'eptl' },
+};
+
+function sameSet(a, b) {
+  if (a.length !== b.length) return false;
+  const as = [...a].sort(), bs = [...b].sort();
+  return as.every((v, i) => v === bs[i]);
+}
+
+// ── v67 LÕI SUY LUẬN THUẦN TÚY (deterministic, đã unit-test — xem /tmp/test_defect_mapping.js
+// lúc phát triển) — nhận vào danh sách "marks" (cột nào AI thấy có dấu cho 1 ống), trả về
+// {tier:'confident', defects, repair} | {tier:'confident', status} | {tier:'uncertain', ...} | null
+function resolveSuarenMarks(rawMarks) {
+  const marks = [...new Set(rawMarks)].filter(Boolean);
+  if (!marks.length) return null;
+  const rule = SUAREN_RULES.find(r => sameSet(r.marks, marks));
+  if (rule) return { tier: 'confident', defects: rule.defects, repair: rule.repair };
+  return { tier: 'uncertain', rawMarks: marks, reason: 'to_hop_ngoai_6_quy_tac' };
+}
+function resolveNdtMarks(rawMarks) {
+  if (rawMarks.includes('unclear')) {
+    const known = rawMarks.filter(k => NDT_TAGS.includes(k));
+    return { tier: 'uncertain', rawMarks: known, reason: 'dau_khong_ro_thuoc_cot_nao' };
+  }
+  const marks = [...new Set(rawMarks)].filter(k => NDT_TAGS.includes(k));
+  if (!marks.length) return null;
+  return { tier: 'confident', defects: marks, repair: null };
+}
+function resolveEptlMarks(rawMarks) {
+  if (rawMarks.includes('unclear')) {
+    const known = rawMarks.filter(k => EPTL_TAGS.includes(k));
+    return { tier: 'uncertain', rawMarks: known, reason: 'dau_khong_ro_thuoc_cot_nao' };
+  }
+  const marks = [...new Set(rawMarks)].filter(Boolean);
+  if (!marks.length) return null;
+  const rule = EPTL_RULES.find(r => sameSet(r.marks, marks));
+  if (rule) return { tier: 'confident', status: rule.status };
+  return { tier: 'uncertain', rawMarks: marks, reason: 'to_hop_ngoai_quy_tac_eptl' };
+}
+function resolveMarksForStage(stage, rawMarks) {
+  if (stage === 4) return resolveSuarenMarks(rawMarks || []);
+  if (stage === 3) return resolveNdtMarks(rawMarks || []);
+  if (stage === 5) return resolveEptlMarks(rawMarks || []);
+  return null;
+}
+
+// ── Khớp số ống GẦN ĐÚNG giữa lệnh đọc số (numbers) và lệnh đọc lỗi (defects) — 2 lệnh AI
+// độc lập, mỗi lệnh tự đọc lại số ống 1 lần, có thể lệch 1 chữ số do ảnh mờ/nén nhỏ. Trước v67,
+// lệch 1 ký tự làm MẤT TRẮNG cả kết quả lỗi của ống đó (lọc chính xác tuyệt đối, không báo gì) —
+// từ v67 vẫn giữ (không tự tick khi chỉ khớp gần đúng) nhưng KHÔNG còn mất trắng, đưa vào uncertain.
+function levenshtein(a, b) {
+  a = String(a); b = String(b);
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+    }
+  }
+  return dp[m][n];
+}
+function matchSerial(candidate, numbersList) {
+  const c = String(candidate).trim();
+  if (!c) return { serial: c, matchType: 'none' };
+  if (numbersList.includes(c)) return { serial: c, matchType: 'exact' };
+  let best = null, bestDist = Infinity;
+  for (const n of numbersList) {
+    if (Math.abs(n.length - c.length) > 1) continue;
+    const d = levenshtein(c, n);
+    if (d < bestDist) { bestDist = d; best = n; }
+  }
+  if (best !== null && bestDist <= 1) return { serial: best, matchType: 'fuzzy', rawSerial: c };
+  return { serial: c, matchType: 'none' };
+}
+
+// ── Hàm chính: nhận "observations" thô AI trả về (mỗi phần tử {serial, marks:[...]})
+// + danh sách numbers đã đọc riêng (đáng tin cậy hơn) → {confident:[...], uncertain:[...]}
+function processDefectObservations(stage, observations, numbersList) {
+  const confident = [];
+  const uncertain = [];
+  (observations || []).forEach(obs => {
+    if (!obs || !obs.serial) return;
+    const resolved = resolveMarksForStage(stage, obs.marks || []);
+    if (!resolved) return;
+    const sm = matchSerial(obs.serial, numbersList);
+    if (sm.matchType === 'none') {
+      uncertain.push({ serial: obs.serial, rawMarks: obs.marks || [], reason: 'so_ong_khong_khop_danh_sach_da_doc', ...resolved });
+      return;
+    }
+    if (resolved.tier === 'confident' && sm.matchType === 'exact') {
+      const entry = { serial: sm.serial };
+      if (resolved.defects) entry.defects = resolved.defects;
+      if (resolved.repair) entry.repair = resolved.repair;
+      if (resolved.status) entry.status = resolved.status;
+      confident.push(entry);
+    } else {
+      uncertain.push({
+        serial: sm.serial,
+        rawMarks: obs.marks || [],
+        reason: resolved.tier === 'uncertain' ? resolved.reason : 'so_ong_chi_khop_gan_dung',
+        matchType: sm.matchType,
+      });
+    }
+  });
+  return { confident, uncertain };
+}
+
+// v67: prompt đọc "quan sát thô" — CHỈ yêu cầu AI MÔ TẢ LẠI cột nào có dấu, KHÔNG còn yêu cầu
+// tự kết luận mã lỗi cuối cùng, KHÔNG còn yêu cầu tự đánh giá "chắc chắn hay không" rồi tự
+// quyết định tick/bỏ (đây chính là quy tắc gây bỏ sót tràn lan ở v64-v66). Việc map "tổ hợp cột
+// nào → lỗi gì, đủ tin cậy để tick hay chỉ nên gợi ý" nay do CODE (resolveMarksForStage) quyết
+// định sau khi nhận kết quả — nhiệm vụ của AI đơn giản, mang tính "chép lại" hơn là "phán đoán".
 function buildDefectsOnlyPrompt(stageNum) {
-  const stageName = STAGE_NAMES[stageNum] || '';
-  const allowedDefects = stageDefectKeys(stageNum);
-  const defectListTxt = allowedDefects.map(k => `  - "${k}": ${DEFECTS[k]}`).join('\n');
-  const repairSection = (stageNum === 4)
-    ? ('\n\nVới mỗi ống có lỗi ở trên, NẾU ảnh có ghi rõ TRẠNG THÁI ĐÃ XỬ LÝ RIÊNG (VD cột "đã sửa"/' +
-       '"kết quả xử lý"/dấu tick tách biệt với cột lỗi), ánh xạ THÊM sang ĐÚNG MỘT mã sau:\n' +
-       Object.entries(SUAREN_REPAIR).map(([k, v]) => `  - "${k}": ${v}`).join('\n') +
-       '\nNẾU ảnh KHÔNG ghi rõ ràng trạng thái xử lý, hoặc không chắc chắn đúng mã nào trong 3 mã trên ' +
-       '— để "repair" là null, TUYỆT ĐỐI KHÔNG tự đoán đại 1 mã.')
-    : '';
-  const ndtNote = (stageNum === 3) ? NDT_CROSS_LINE_NOTE : '';
-  const suarenNote = (stageNum === 4) ? SUAREN_TERMINOLOGY_NOTE : '';
+  const cfg = STAGE_TAG_CONFIG[stageNum];
+  if (!cfg) return null;
+  const tagListTxt = cfg.tagDesc.map(t => `  - "${t.tag}": ${t.desc}`).join('\n');
   return (
-    `Đây là ảnh chụp SỔ/BẢNG GHI CHÉP kiểm tra ống thép tại khâu "${stageName}" của một xưởng kiểm tra ống. ` +
+    `Đây là ảnh chụp SỔ/BẢNG GHI CHÉP kiểm tra ống thép tại khâu "${cfg.name}" của một xưởng kiểm tra ống. ` +
     'Sổ có thể ở BẤT KỲ định dạng nào — bảng kẻ ô in sẵn, sổ tay viết tay tự do, danh sách đơn giản, ảnh chụp ' +
     'Excel, v.v. Hãy TỰ THÍCH ỨNG với định dạng thực tế trong ảnh, KHÔNG giả định trước cấu trúc cột.\n\n' +
-    'NHIỆM VỤ DUY NHẤT của bạn: tìm CÁC ỐNG CÓ LỖI/GHI CHÚ VẤN ĐỀ RÕ RÀNG trong ảnh — bỏ qua HẲN những ' +
-    'ống bình thường/"Đạt"/không có ghi chú gì (KHÔNG cần liệt kê hết mọi ống trong ảnh, chỉ cần những ' +
-    'ống có vấn đề).\n\n' +
-    'Với MỖI ống có vấn đề đó, thực hiện theo đúng thứ tự:\n' +
+    'NHIỆM VỤ DUY NHẤT của bạn là MÔ TẢ LẠI những gì thấy trong ảnh — KHÔNG tự kết luận ống đó bị lỗi gì, ' +
+    'KHÔNG tự đánh giá "chắc chắn hay không chắc chắn" rồi tự quyết định có nên báo cáo hay không. Chỉ cần ' +
+    'ống đó có BẤT KỲ dấu hiệu nào (tick/X/gạch chéo/khoanh tròn/chữ viết) ở 1 trong các cột dưới đây, hãy ' +
+    'đưa vào kết quả và ghi lại ĐÚNG cột nào có dấu — việc quyết định cuối cùng do hệ thống khác xử lý, ' +
+    'không phải việc của bạn. BỎ QUA HẲN những ống hoàn toàn không có dấu gì (Đạt/bình thường, không cần ' +
+    'liệt kê hết mọi ống trong ảnh).\n\n' +
+    'Danh sách cột cần tìm dấu, dùng ĐÚNG mã sau khi báo cáo (1 ống có thể có NHIỀU mã cùng lúc nếu nhiều ' +
+    'cột đều có dấu):\n' + tagListTxt + '\n\n' +
+    'Với MỖI ống có ít nhất 1 cột có dấu:\n' +
     '1. Đọc số hiệu ống đó CẨN THẬN từng chữ số một — đặc biệt chú ý các cặp chữ số dễ nhầm khi viết tay: ' +
     DIGIT_CONFUSION_PAIRS + '.\n' +
-    '2. Xác định ghi chú/lỗi mà ảnh THỰC SỰ ghi cho đúng ống đó, rồi ánh xạ sang mã lỗi trong danh sách sau ' +
-    '(CHỈ dùng đúng mã trong danh sách, KHÔNG tự bịa mã khác, 1 ống có thể có NHIỀU mã cùng lúc):\n' +
-    defectListTxt + '\n\n' +
-    'QUAN TRỌNG NHẤT — QUY TẮC "KHÔNG CHẮC THÌ BỎ QUA" (đọc kỹ trước khi làm bước dưới):\n' +
-    'NẾU KHÔNG CHẮC CHẮN — dù là không chắc ống đó có thực sự lỗi hay không, không chắc đúng lỗi nào trong ' +
-    'các mã ở trên, hay (với khâu Sửa ren) không chắc trạng thái xử lý là gì — THÌ TUYỆT ĐỐI KHÔNG được tự ' +
-    'đoán, KHÔNG tự chọn đại một mã nào, và BỎ QUA HẲN ống đó (không đưa vào kết quả "pipes"), để KTV tự ' +
-    'xem ảnh gốc và chọn tay. Thà bỏ sót còn hơn tự tick sai — tick sai KTV dễ không để ý mà bỏ qua luôn, ' +
-    'còn bỏ sót thì KTV vẫn thấy ống đó cần xem lại khi rà danh sách.\n\n' +
-    'Quy tắc ánh xạ lỗi (RẤT QUAN TRỌNG):\n' +
-    '  - Chỉ gán lỗi khi ảnh THỰC SỰ có ghi chú/ký hiệu/dấu tick/khoanh tròn/gạch chéo/chữ viết tay chỉ RÕ ' +
-    'RÀNG, KHÔNG MẬP MỜ vấn đề cho đúng ống đó — TUYỆT ĐỐI KHÔNG suy đoán (xem quy tắc "không chắc thì bỏ ' +
-    'qua" ở trên).\n' +
-    '  - Ghi chú rõ ràng có ý nghĩa "có vấn đề/lỗi/loại/reject" (dấu X, gạch chéo, khoanh đỏ, chữ ' +
-    '"hỏng"/"loại"/"reject"...) nhưng KHÔNG xác định được đúng loại cụ thể → dùng mã "khac" NẾU danh sách ' +
-    'trên có mã đó; nếu không có "khac" thì bỏ qua ống đó, không đưa vào kết quả.' +
-    repairSection + ndtNote + suarenNote + '\n\n' +
+    '2. Liệt kê ĐẦY ĐỦ và CHÍNH XÁC mọi cột có dấu cho đúng ống đó (không bỏ sót cột nào có dấu, không thêm ' +
+    'cột nào không có dấu).\n' +
+    '3. CHỈ trong trường hợp hiếm — dấu mực nằm giữa ranh giới 2 cột, hoặc bị nhòe/che khuất tới mức KHÔNG ' +
+    'THỂ xác định thuộc cột nào — thêm "unclear" vào danh sách marks của ống đó thay vì đoán bừa 1 cột. Đây ' +
+    'là trường hợp NGOẠI LỆ hiếm, không áp dụng cho các dấu bình thường dù nét có hơi mờ (vẫn cố xác định ' +
+    'đúng cột nếu còn nhận ra được vị trí tương đối trong bảng).\n\n' +
     'CHỈ trả lời bằng 1 object JSON DUY NHẤT theo đúng định dạng sau, không kèm chữ giải thích, không markdown:\n' +
-    '{"pipes":[{"serial":"7115","defects":["' + (allowedDefects[0] || 'khac') + '"]' +
-    (stageNum === 4 ? ',"repair":"da-sua-ren"' : '') + '}]}\n' +
-    'Không có ống nào có vấn đề: {"pipes":[]}'
+    '{"observations":[{"serial":"7115","marks":["' + cfg.tagDesc[0].tag + '"]}]}\n' +
+    'Không có ống nào có dấu: {"observations":[]}'
   );
 }
 
-// v63fix2: trích riêng 1 trường mảng (VD "numbers" hoặc "pipes") từ text trả về, có khả năng
-// "cứu" dữ liệu khi JSON bị CẮT GIỮA CHỪNG (model bị dừng khi chạm max_tokens hoặc kết nối bị
+// v63fix2: trích riêng 1 trường mảng (VD "numbers" hoặc "observations") từ text trả về, có khả
+// năng "cứu" dữ liệu khi JSON bị CẮT GIỮA CHỪNG (model bị dừng khi chạm max_tokens hoặc kết nối bị
 // ngắt giữa chừng vì gần chạm giới hạn 25s của Vercel Edge Function) — thay vì phải JSON.parse
 // nguyên khối rồi mất trắng cả object nếu chỉ 1 ký tự cuối bị thiếu. Theo dõi độ sâu ngoặc
 // []/{} và trạng thái trong-chuỗi để tìm đúng dấu ']' khớp; nếu không tìm thấy (bị cắt), cắt bớt
 // về phần tử hoàn chỉnh gần cuối cùng rồi tự đóng ']' lại để JSON.parse phần còn cứu được.
 // v64: logic salvage dùng chung, tách khỏi extractArrayField() để tái dùng cho cả trường hợp không
 // có "key" bao ngoài (VD "numbers" giờ cũng cần cứu dữ liệu khi bị cắt — trước v64 chỉ áp dụng cho
-// "pipes", nhưng numbers còn quan trọng hơn nên cũng cần cơ chế này, xem extractBareJsonArray()).
+// "pipes"/"observations", nhưng numbers còn quan trọng hơn nên cũng cần cơ chế này).
 function extractArraySliceFrom(rawText, bracketIdx) {
   if (bracketIdx === -1) return null;
   let depth = 0, inStr = false, esc = false, endIdx = -1;
@@ -410,22 +564,23 @@ export default async function handler(request) {
       });
     }
 
-    // v63: chỉ bật nhận diện lỗi khi "stage" hợp lệ VÀ trong khoảng 0-4 (Tiếp nhận..Sửa ren).
-    // Khâu Đóng gói (6)/Ép thủy lực (5)/không gửi stage → giữ hành vi cũ (chỉ đọc số).
+    // v63: chỉ bật nhận diện lỗi khi "stage" hợp lệ VÀ nằm trong danh sách khâu có cấu hình
+    // (STAGE_TAG_CONFIG). v67: danh sách đổi từ {2,3,4} (Thông nòng/NDT/Sửa ren) sang {3,4,5}
+    // (NDT/Sửa ren/Ép thủy lực) theo đúng yêu cầu KTV 2026-07-15 — Thông nòng rút khỏi diện
+    // này (chỉ đọc số), Ép thủy lực được thêm vào. Việc app có gửi "stage" hay không giờ do
+    // KTV chủ động chọn ("① Chỉ đọc số"/"② Đọc số + Tick lỗi") mỗi lần chụp, không còn tự
+    // động theo khâu như trước.
     const stageNum = Number.isInteger(stage) ? stage : parseInt(stage, 10);
-    const withDefects = Number.isFinite(stageNum) && stageNum >= 0 && stageNum <= 4;
+    const withDefects = Number.isFinite(stageNum) && !!STAGE_TAG_CONFIG[stageNum];
     const model = 'claude-sonnet-5'; // model Sonnet — so sánh độ chính xác với Haiku (ocr.js) / Opus (ocr-opus.js)
 
     // v63fix4: GỌI RIÊNG 2 LỆNH ĐỘC LẬP SONG SONG khi có nhận diện lỗi — 1 lệnh CHỈ đọc số (dùng
-    // ĐÚNG prompt đơn giản, ổn định từ trước, không đổi 1 chữ), 1 lệnh RIÊNG chỉ tìm ống có lỗi.
-    // LÝ DO: KTV phản ánh khâu Sửa ren (prompt dài/phức tạp nhất vì có thêm mục "đã xử lý") đọc SỐ
-    // kém hẳn so với khâu khác dù cùng model — nghi vấn hợp lý là bắt AI làm nhiều việc cùng lúc
-    // (đọc số + phân loại nhiều mã lỗi + xác định trạng thái xử lý) trong 1 lượt duy nhất làm GIẢM
-    // độ tập trung cho từng việc, nhất là việc ĐỌC SỐ — vốn quan trọng nhất (sai số ống ảnh hưởng
-    // cả phiếu, còn sai/thiếu lỗi thì KTV vẫn xem lại và tự chọn được). Tách riêng để việc đọc số
-    // LUÔN dùng đúng 1 prompt đơn giản, không lẫn yêu cầu nào khác, bất kể khâu nào. Chạy song song
-    // (Promise.allSettled) nên KHÔNG tăng thời gian chờ so với trước; nếu lệnh lỗi thất bại, số ống
-    // đọc được ở lệnh kia VẪN giữ nguyên — chỉ mất phần tự động tích lỗi round đó.
+    // ĐÚNG prompt đơn giản, ổn định từ trước, không đổi 1 chữ), 1 lệnh RIÊNG chỉ tìm ống có dấu
+    // (v67: giờ chỉ MÔ TẢ cột nào có dấu, không tự kết luận lỗi/độ tin cậy nữa — xem
+    // buildDefectsOnlyPrompt). LÝ DO tách riêng: bắt AI làm nhiều việc cùng lúc (đọc số + phân
+    // loại lỗi) trong 1 lượt duy nhất làm GIẢM độ tập trung cho từng việc, nhất là việc ĐỌC SỐ —
+    // vốn quan trọng nhất. Chạy song song (Promise.allSettled) nên KHÔNG tăng thời gian chờ so
+    // với trước; nếu lệnh lỗi thất bại, số ống đọc được ở lệnh kia VẪN giữ nguyên.
     const numbersPrompt = buildPrompt(stageNum, false);
     let numbersRawText, defectsRawText = null;
 
@@ -433,11 +588,12 @@ export default async function handler(request) {
       const defectsPrompt = buildDefectsOnlyPrompt(stageNum);
       const [numResult, defResult] = await Promise.allSettled([
         // v64: bump 2048→4096 cho lệnh đọc số — danh sách rất dài (nhiều khoảng nối tiếp, hàng
-        // trăm số) có thể vượt 2048 token và bị CẮT GIỮA CHỪNG trước đây. Chạy song song với lệnh
-        // lỗi (không tăng thời gian chờ), và sinh ra dãy số thuần (rẻ/nhanh) nên tăng token không
-        // đáng kể tới độ trễ thực tế trong hầu hết trường hợp.
+        // trăm số) có thể vượt 2048 token và bị CẮT GIỮA CHỪNG trước đây.
         callClaude(apiKey, model, numbersPrompt, image, mime, 4096),
-        callClaude(apiKey, model, defectsPrompt, image, mime, 2048),
+        // v67: bump 3072→4096 — nhiệm vụ MÔ TẢ (không còn tự lọc theo "chắc chắn") có thể liệt
+        // kê nhiều ống hơn hẳn trước (mọi ống có dấu, kể cả dấu mờ/tổ hợp lạ), cần thêm khoảng
+        // trống token để không bị cắt giữa chừng với danh sách dài.
+        callClaude(apiKey, model, defectsPrompt, image, mime, 4096),
       ]);
       if (numResult.status === 'rejected') {
         const e = numResult.reason;
@@ -452,7 +608,7 @@ export default async function handler(request) {
       // tìm được ống lỗi nào" — numbers vẫn trả về đầy đủ, KTV chọn lỗi tay bình thường.
     } else {
       try {
-        numbersRawText = await callClaude(apiKey, model, numbersPrompt, image, mime, 4096); // v64: xem giải thích ở nhánh withDefects
+        numbersRawText = await callClaude(apiKey, model, numbersPrompt, image, mime, 4096);
       } catch (e) {
         const keyInfo = 'Key hiện dùng: ' + apiKey.length + ' ký tự, bắt đầu bằng "' + apiKey.slice(0, 12) + '..."';
         return new Response(JSON.stringify({ error: (e && e.message) || 'Lỗi gọi Claude', detail: ((e && e.detail) || '') + ' | ' + keyInfo }), {
@@ -462,9 +618,6 @@ export default async function handler(request) {
     }
 
     // Trích "numbers" — LUÔN từ 1 mảng JSON thuần (prompt đọc số không đổi bất kể withDefects).
-    // v64: thử parse thẳng trước (đường nhanh, đủ dùng khi JSON nguyên vẹn); nếu lỗi (JSON bị cắt
-    // giữa chừng vì chạm max_tokens hay mất kết nối) → rơi xuống extractBareJsonArray() để CỨU phần
-    // danh sách đã đọc được thay vì trả về rỗng hoàn toàn (đặc biệt quan trọng với danh sách dài).
     let numbersRaw = null;
     const arrMatch = numbersRawText.match(/\[[\s\S]*\]/);
     if (arrMatch) {
@@ -480,45 +633,35 @@ export default async function handler(request) {
     const numbers = Array.isArray(numbersRaw)
       ? [...new Set(numbersRaw.map(String).map(s => s.trim()).filter(Boolean))]
       : [];
-    const numbersSet = new Set(numbers);
 
-    // Trích "pipes" từ lệnh gọi RIÊNG (defectsRawText) — dùng extractArrayField() để cứu dữ liệu
-    // nếu bị cắt giữa chừng, giống cơ chế v63fix2 trước đây nhưng giờ áp dụng cho lệnh gọi độc lập.
+    // v67: trích "observations" (quan sát thô) rồi CHẠY QUA LÕI SUY LUẬN THUẦN TÚY
+    // (processDefectObservations) để tách thành "pipes" (đủ tin cậy, tự tick) và "uncertain"
+    // (không tự tick, chỉ gợi ý cho KTV xem lại) — thay cho việc nhận thẳng "pipes" đã được
+    // chính AI tự lọc như trước (nguồn gốc lỗi bỏ sót tràn lan).
     let pipesOut = [];
+    let uncertainOut = [];
     if (withDefects && defectsRawText) {
-      let pipesRaw = null;
+      let obsRaw = null;
       const objMatch = defectsRawText.match(/\{[\s\S]*\}/);
       if (objMatch) {
         try {
           const parsed = JSON.parse(objMatch[0]);
-          pipesRaw = Array.isArray(parsed.pipes) ? parsed.pipes : null;
+          obsRaw = Array.isArray(parsed.observations) ? parsed.observations : null;
         } catch (e) { /* rơi xuống trích riêng bên dưới */ }
       }
-      if (pipesRaw === null) pipesRaw = extractArrayField(defectsRawText, 'pipes');
-      if (Array.isArray(pipesRaw)) {
-        const allowedDefects = stageDefectKeys(stageNum);
-        pipesRaw.forEach(p => {
-          if (!p || !p.serial) return;
-          const serial = String(p.serial).trim();
-          if (!serial) return;
-          // v63fix4: CHỈ giữ ống có mặt trong "numbers" (lệnh đọc số riêng, đáng tin cậy hơn vì
-          // không bị lẫn việc khác) — phòng khi lệnh tìm lỗi đọc nhầm 1 số không khớp ống nào thật;
-          // ống bị loại ở đây vẫn không mất gì vì KTV luôn xem lại danh sách trước khi lưu.
-          if (!numbersSet.has(serial)) return;
-          const defects = Array.isArray(p.defects)
-            ? [...new Set(p.defects.map(String).filter(k => allowedDefects.includes(k)))]
-            : [];
-          let repair = null;
-          if (stageNum === 4 && p.repair && Object.prototype.hasOwnProperty.call(SUAREN_REPAIR, String(p.repair))) {
-            repair = String(p.repair);
-          }
-          if (!defects.length && !repair) return;
-          pipesOut.push({ serial, defects, repair });
-        });
+      if (obsRaw === null) obsRaw = extractArrayField(defectsRawText, 'observations');
+      if (Array.isArray(obsRaw)) {
+        const cleaned = obsRaw
+          .filter(o => o && o.serial)
+          .map(o => ({ serial: String(o.serial).trim(), marks: Array.isArray(o.marks) ? o.marks.map(String) : [] }))
+          .filter(o => o.serial);
+        const { confident, uncertain } = processDefectObservations(stageNum, cleaned, numbers);
+        pipesOut = confident;
+        uncertainOut = uncertain;
       }
     }
 
-    return new Response(JSON.stringify({ numbers, pipes: pipesOut }), {
+    return new Response(JSON.stringify({ numbers, pipes: pipesOut, uncertain: uncertainOut }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
 
