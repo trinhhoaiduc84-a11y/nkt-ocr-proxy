@@ -40,6 +40,23 @@
 // "① Chỉ đọc số"/"② Đọc số + Tick lỗi" ở app), không còn tự động theo khâu nữa — backend
 // vẫn giữ nguyên quy ước cũ: CHỈ bật khi client gửi kèm "stage" hợp lệ.
 //
+// v68 (2026-07-15, KTV đối chiếu thêm với ảnh thật ống 7139/7140/7141): sau khi triển khai
+// v67, KTV vẫn phát hiện vài ống bị GÁN NHẦM SANG HÀNG KẾ BÊN (không phải sai vì "không thấy
+// dấu" hay "tổ hợp cột lạ" — 2 lỗi đã xử lý ở v67 — mà là AI gán ĐÚNG loại dấu nhưng SAI SỐ
+// ỐNG, vì ảnh chụp sổ tay bị nghiêng + các hàng kẻ quá sát nhau khiến 1 dấu X nằm gần đường kẻ
+// ngang phân cách 2 hàng có thể bị hiểu nhầm là thuộc hàng liền kề). Trước v68, cơ chế
+// "uncertain" CHƯA có cách nào bắt được lỗi này — nó chỉ xét TỔ HỢP CỘT có hợp lệ hay không,
+// không xét ĐỘ TIN CẬY VỀ VỊ TRÍ HÀNG của từng dấu. v68 thêm hẳn 1 trục kiểm tra mới, độc lập
+// với trục "tổ hợp cột": prompt giờ yêu cầu AI, với MỖI dấu tìm thấy, tự kiểm tra xem dấu đó
+// có nằm sát đường kẻ ngang trên/dưới của ô hay không (dấu chạm/gần chạm 1 trong 2 đường kẻ,
+// hoặc ảnh bị nghiêng khiến khó xác định chắc chắn dấu thuộc hàng nào) — nếu CÓ nghi ngờ, AI
+// đặt "rowUncertain": true cho quan sát đó. Ở lớp code thuần túy (processDefectObservations),
+// bất kỳ quan sát nào có rowUncertain=true đều bị CHẶN không cho vào "confident" dù tổ hợp cột
+// có khớp đúng 1 trong các quy tắc hay không — luôn hạ xuống "uncertain" với lý do mới
+// "dau_gan_ranh_gioi_hang" để KTV tự xác nhận đúng ống. Đây là lớp phòng vệ THỨ 2, độc lập với
+// lớp "tổ hợp cột lạ" đã có — 2 lớp không thay thế nhau, ống có thể bị hạ uncertain vì 1 trong
+// 2 lý do (hoặc cả 2).
+//
 // TẠI SAO ĐỔI TỪ CLOUDFLARE SANG VERCEL: bản chạy trên Cloudflare Worker bị Anthropic
 // chặn với lỗi "403 forbidden — Request not allowed" — nhiều khả năng do lưu lượng gọi
 // TỪ hạ tầng Cloudflare Workers bị nghi ngờ là bot/lạm dụng (vấn đề hạ tầng, không phải do
@@ -82,7 +99,7 @@
 //   2. URL đầy đủ để dùng trong app (bản Opus) là:
 //      https://nkt-ocr-proxy-xxxx.vercel.app/api/ocr-opus
 //      (thêm "/api/ocr-opus" ở cuối — đây chính là đường dẫn tới file này)
-//   3. Dùng đúng file NKT_Inspect_Pro_v59_opus.html đã cấu hình sẵn URL này —
+//   3. Dùng đúng file NKT_Inspect_Pro tương ứng đã cấu hình sẵn URL này —
 //      không cần gửi lại cho tôi trừ khi domain gốc trên Vercel khác với domain đã cấu hình.
 //
 // AN TOÀN: File này KHÔNG đụng gì đến Google Sheets hay dữ liệu phiếu kiểm tra — chỉ
@@ -346,8 +363,15 @@ function matchSerial(candidate, numbersList) {
   return { serial: c, matchType: 'none' };
 }
 
-// ── Hàm chính: nhận "observations" thô AI trả về (mỗi phần tử {serial, marks:[...]})
-// + danh sách numbers đã đọc riêng (đáng tin cậy hơn) → {confident:[...], uncertain:[...]}
+// ── Hàm chính: nhận "observations" thô AI trả về (mỗi phần tử {serial, marks:[...],
+// rowUncertain?:boolean}) + danh sách numbers đã đọc riêng (đáng tin cậy hơn) →
+// {confident:[...], uncertain:[...]}
+// v68: THÊM trục kiểm tra "rowUncertain" — ĐỘC LẬP với trục "tổ hợp cột có hợp lệ hay không".
+// Dù tổ hợp cột khớp đúng 1 trong các quy tắc (đủ điều kiện "confident" về mặt Ý NGHĨA dấu),
+// nếu AI tự báo nghi ngờ VỊ TRÍ HÀNG của dấu đó (dấu nằm sát ranh giới 2 hàng/ảnh nghiêng khó
+// xác định), vẫn phải hạ xuống "uncertain" — vì tick sai SỐ ỐNG (đúng loại lỗi nhưng gán nhầm
+// ống) nguy hiểm không kém tick sai LOẠI LỖI, và trục "tổ hợp cột" cũ không có cách nào bắt
+// được kiểu lỗi này.
 function processDefectObservations(stage, observations, numbersList) {
   const confident = [];
   const uncertain = [];
@@ -358,6 +382,15 @@ function processDefectObservations(stage, observations, numbersList) {
     const sm = matchSerial(obs.serial, numbersList);
     if (sm.matchType === 'none') {
       uncertain.push({ serial: obs.serial, rawMarks: obs.marks || [], reason: 'so_ong_khong_khop_danh_sach_da_doc', ...resolved });
+      return;
+    }
+    if (obs.rowUncertain === true) {
+      uncertain.push({
+        serial: sm.serial,
+        rawMarks: obs.marks || [],
+        reason: 'dau_gan_ranh_gioi_hang',
+        matchType: sm.matchType,
+      });
       return;
     }
     if (resolved.tier === 'confident' && sm.matchType === 'exact') {
@@ -407,9 +440,21 @@ function buildDefectsOnlyPrompt(stageNum) {
     '3. CHỈ trong trường hợp hiếm — dấu mực nằm giữa ranh giới 2 cột, hoặc bị nhòe/che khuất tới mức KHÔNG ' +
     'THỂ xác định thuộc cột nào — thêm "unclear" vào danh sách marks của ống đó thay vì đoán bừa 1 cột. Đây ' +
     'là trường hợp NGOẠI LỆ hiếm, không áp dụng cho các dấu bình thường dù nét có hơi mờ (vẫn cố xác định ' +
-    'đúng cột nếu còn nhận ra được vị trí tương đối trong bảng).\n\n' +
+    'đúng cột nếu còn nhận ra được vị trí tương đối trong bảng).\n' +
+    '4. KIỂM TRA RIÊNG VỀ HÀNG (khác với kiểm tra về CỘT ở bước 3) — đây là bước BẮT BUỘC cho MỌI dấu, ' +
+    'không phải trường hợp hiếm: sổ tay viết tay thường có các hàng kẻ RẤT SÁT NHAU, và ảnh chụp có thể hơi ' +
+    'nghiêng (các đường kẻ ngang không thẳng hàng với mép ảnh) — cả 2 điều này khiến 1 dấu X/tick nằm gần ' +
+    'đường kẻ ngang phía trên hoặc phía dưới của ô RẤT DỄ bị nhìn nhầm là thuộc về hàng (tức ống) liền kề ' +
+    'thay vì đúng hàng của nó. Với MỖI dấu, hãy tự hỏi: dấu này có nằm SÁT (chạm hoặc gần chạm) đường kẻ ' +
+    'ngang trên/dưới của ô không? Ảnh có bị nghiêng đủ nhiều khiến việc bám theo đúng 1 đường kẻ ngang từ ' +
+    'số ống sang tới cột đánh dấu trở nên khó khăn không? Nếu CÓ MỘT TRONG HAI dấu hiệu trên khiến bạn ' +
+    'không chắc chắn dấu đó thuộc đúng hàng của số ống bạn vừa đọc (dù bạn vẫn chọn 1 số ống cụ thể để báo ' +
+    'cáo), hãy thêm "rowUncertain": true vào quan sát đó. Nếu dấu nằm rõ ràng giữa ô, cách xa cả 2 đường kẻ ' +
+    'trên/dưới, không cần thêm trường này (coi như false, không cần ghi tường minh).\n\n' +
     'CHỈ trả lời bằng 1 object JSON DUY NHẤT theo đúng định dạng sau, không kèm chữ giải thích, không markdown:\n' +
-    '{"observations":[{"serial":"7115","marks":["' + cfg.tagDesc[0].tag + '"]}]}\n' +
+    '{"observations":[{"serial":"7115","marks":["' + cfg.tagDesc[0].tag + '"]},' +
+    '{"serial":"7140","marks":["' + cfg.tagDesc[0].tag + '"],"rowUncertain":true}]}\n' +
+    '(ví dụ trên: ống 7140 có dấu nhưng dấu đó nằm sát ranh giới hàng nên kèm "rowUncertain":true)\n' +
     'Không có ống nào có dấu: {"observations":[]}'
   );
 }
@@ -653,7 +698,11 @@ export default async function handler(request) {
       if (Array.isArray(obsRaw)) {
         const cleaned = obsRaw
           .filter(o => o && o.serial)
-          .map(o => ({ serial: String(o.serial).trim(), marks: Array.isArray(o.marks) ? o.marks.map(String) : [] }))
+          .map(o => ({
+            serial: String(o.serial).trim(),
+            marks: Array.isArray(o.marks) ? o.marks.map(String) : [],
+            rowUncertain: o.rowUncertain === true,
+          }))
           .filter(o => o.serial);
         const { confident, uncertain } = processDefectObservations(stageNum, cleaned, numbers);
         pipesOut = confident;
