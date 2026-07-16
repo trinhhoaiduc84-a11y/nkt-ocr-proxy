@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// api/ocr-opus.js — Vercel Edge Function, đọc số ống từ ảnh bằng Claude (Anthropic) — bản Opus
-// Dùng cho tính năng "📷 Đọc số ống từ ảnh (AI)" trong NKT Inspect Pro (khâu Tiếp nhận
-// và Đóng gói & Phân loại).
+// api/ocr.js — Vercel Edge Function, đọc số ống (+ nhận diện lỗi từ v63) từ ảnh
+// bằng Claude (Anthropic) — bản Haiku (rẻ nhất, mặc định).
+// Dùng cho tính năng "📷 Đọc số ống từ ảnh (AI)" trong NKT Inspect Pro.
 //
 // v63: MỞ RỘNG — trước đây chỉ đọc SỐ HIỆU ỐNG. Từ bản này, khi gọi kèm tham số
 // "stage" (khâu hiện tại), AI sẽ ĐỌC LUÔN cả GHI CHÚ LỖI của từng ống trong ảnh sổ
@@ -62,8 +62,8 @@
 // TỪ hạ tầng Cloudflare Workers bị nghi ngờ là bot/lạm dụng (vấn đề hạ tầng, không phải do
 // key hay code sai). Vercel là nền tảng khác hẳn, không dính vấn đề này.
 //
-// FILE NÀY PHẢI NẰM ĐÚNG ĐƯỜNG DẪN: api/ocr-opus.js (cùng thư mục "api" với ocr.js) —
-// đây là quy ước của Vercel để tự nhận diện thành 1 endpoint tại /api/ocr-opus.
+// FILE NÀY PHẢI NẰM ĐÚNG ĐƯỜNG DẪN: api/ocr.js (thư mục "api", file "ocr.js" bên trong) —
+// đây là quy ước của Vercel để tự nhận diện thành 1 endpoint tại /api/ocr.
 // ═══════════════════════════════════════════════════════════════════════════
 // HƯỚNG DẪN TRIỂN KHAI (không cần biết lập trình, không cần cài gì trên máy):
 //
@@ -72,8 +72,8 @@
 //   2. Bấm nút "+" góc trên phải → "New repository" → đặt tên (VD: nkt-ocr-proxy) →
 //      chọn "Public" hoặc "Private" đều được → "Create repository"
 //   3. Trong repo vừa tạo, bấm "Add file" → "Create new file"
-//   4. Ở ô đặt tên file, gõ ĐÚNG: api/ocr-opus.js (gõ cả dấu / — GitHub tự hiểu là tạo
-//      thêm file "ocr-opus.js" trong thư mục "api" đã có sẵn)
+//   4. Ở ô đặt tên file, gõ ĐÚNG: api/ocr.js (gõ cả dấu / — GitHub tự hiểu là tạo
+//      thư mục "api" rồi tạo file "ocr.js" bên trong)
 //   5. Dán TOÀN BỘ nội dung file này vào ô nội dung bên dưới
 //   6. Kéo xuống cuối trang, bấm "Commit changes"
 //
@@ -96,18 +96,19 @@
 // BƯỚC 4 — Lấy URL và gắn vào app:
 //   1. Trên trang chính của project Vercel, copy domain hiện ra (dạng
 //      https://nkt-ocr-proxy-xxxx.vercel.app)
-//   2. URL đầy đủ để dùng trong app (bản Opus) là:
-//      https://nkt-ocr-proxy-xxxx.vercel.app/api/ocr-opus
-//      (thêm "/api/ocr-opus" ở cuối — đây chính là đường dẫn tới file này)
-//   3. Dùng đúng file NKT_Inspect_Pro tương ứng đã cấu hình sẵn URL này —
-//      không cần gửi lại cho tôi trừ khi domain gốc trên Vercel khác với domain đã cấu hình.
+//   2. URL đầy đủ để dùng trong app là: https://nkt-ocr-proxy-xxxx.vercel.app/api/ocr
+//      (thêm "/api/ocr" ở cuối — đây chính là đường dẫn tới file này)
+//   3. Gửi URL đầy đủ đó (có "/api/ocr" ở cuối) cho tôi, tôi sẽ gắn vào app.
 //
 // AN TOÀN: File này KHÔNG đụng gì đến Google Sheets hay dữ liệu phiếu kiểm tra — chỉ
-// nhận 1 ảnh, trả về 1 danh sách số. Không lưu trữ ảnh ở đâu cả (xử lý xong là bỏ).
+// nhận 1 ảnh (+ tên khâu nếu có), trả về danh sách số/lỗi. Không lưu trữ ảnh ở đâu cả
+// (xử lý xong là bỏ).
 //
-// SO SÁNH ĐỘ CHÍNH XÁC: đây là bản Opus (input $5/MTok, output $25/MTok, giữ tới 4784 ô ảnh) — dùng để so sánh với bản Haiku
-// (api/ocr.js, rẻ nhất) và bản còn lại. Cả 3 dùng chung CLAUDE_API_KEY đã cấu hình sẵn trong
-// Vercel — không cần tạo thêm key hay project mới.
+// SO SÁNH ĐỘ CHÍNH XÁC: file này dùng model Haiku (rẻ nhất). Có 2 file song song để so sánh
+// độ chính xác đọc số — ocr-sonnet.js (model Sonnet 5, endpoint /api/ocr-sonnet) và
+// ocr-opus.js (model Opus 4.8, endpoint /api/ocr-opus). Cả 3 dùng chung CLAUDE_API_KEY đã
+// cấu hình, không cần tạo thêm key hay project Vercel mới — chỉ cần thêm 2 file đó vào cùng
+// thư mục api/ trong repo GitHub hiện có.
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const config = { runtime: 'edge' };
@@ -617,7 +618,7 @@ export default async function handler(request) {
     // động theo khâu như trước.
     const stageNum = Number.isInteger(stage) ? stage : parseInt(stage, 10);
     const withDefects = Number.isFinite(stageNum) && !!STAGE_TAG_CONFIG[stageNum];
-    const model = 'claude-opus-4-8'; // model Opus — so sánh độ chính xác với Haiku (ocr.js) / Sonnet (ocr-sonnet.js)
+    const model = 'claude-haiku-4-5-20251001'; // rẻ + nhanh — bản so sánh: ocr-sonnet.js / ocr-opus.js
 
     // v63fix4: GỌI RIÊNG 2 LỆNH ĐỘC LẬP SONG SONG khi có nhận diện lỗi — 1 lệnh CHỈ đọc số (dùng
     // ĐÚNG prompt đơn giản, ổn định từ trước, không đổi 1 chữ), 1 lệnh RIÊNG chỉ tìm ống có dấu
